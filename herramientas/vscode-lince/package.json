@@ -52,6 +52,30 @@
         "when": "editorLangId == lince"
       }
     ],
+    "debuggers": [
+      {
+        "type": "lince",
+        "label": "Lince",
+        "languages": ["lince"],
+        "configurationAttributes": {
+          "launch": {
+            "properties": {
+              "programa": {
+                "type": "string",
+                "description": "El archivo .ln o la carpeta del proyecto. Si falta, el archivo abierto."
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "lince",
+            "request": "launch",
+            "name": "Lince: ejecutar el archivo abierto"
+          }
+        ]
+      }
+    ],
     "menus": {
       "editor/title/run": [
         {
