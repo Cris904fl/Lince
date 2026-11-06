@@ -61,42 +61,86 @@ public static class Externos
         nombre is not null && (nombre.StartsWith("System", StringComparison.Ordinal) || nombre.StartsWith("Microsoft.", StringComparison.Ordinal)
             || nombre is "mscorlib" or "netstandard");
 
-    /// <summary>Si algún ensamblado del runtime tiene tipos públicos en ese espacio de nombres (o en uno anidado en él).</summary>
-    public static bool ExisteEspacio(string espacio)
+    private static readonly Dictionary<string, Assembly> _referenciasCargadas = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Carga los ensamblados de paquetes y marcos de un proyecto para poder enlazar contra
+    /// ellos. Cada ruta se carga una sola vez por proceso; una que no se pueda cargar se omite
+    /// (un paquete nativo, por ejemplo).
+    /// </summary>
+    public static ImmutableArray<Assembly> CargarReferencias(IEnumerable<string> rutas)
     {
-        lock (_candado)
+        var cargados = ImmutableArray.CreateBuilder<Assembly>();
+        foreach (var ruta in rutas)
         {
-            if (_espacios is null)
+            var completa = Path.GetFullPath(ruta);
+            lock (_candado)
             {
-                _espacios = new HashSet<string>(StringComparer.Ordinal);
-                foreach (var ensamblado in Ensamblados)
+                if (!_referenciasCargadas.TryGetValue(completa, out var ensamblado))
                 {
-                    Type[] tipos;
                     try
                     {
-                        tipos = ensamblado.GetExportedTypes();
+                        ensamblado = Assembly.LoadFrom(completa);
                     }
-                    catch (Exception excepcion) when (excepcion is ReflectionTypeLoadException or FileNotFoundException or TypeLoadException)
+                    catch (Exception excepcion) when (excepcion is BadImageFormatException or FileLoadException or FileNotFoundException)
                     {
                         continue;
                     }
 
-                    foreach (var tipo in tipos)
-                    {
-                        for (var ns = tipo.Namespace; !string.IsNullOrEmpty(ns); ns = ns.Contains('.') ? ns[..ns.LastIndexOf('.')] : null)
-                        {
-                            _espacios.Add(ns);
-                        }
-                    }
+                    _referenciasCargadas[completa] = ensamblado;
                 }
-            }
 
-            return _espacios.Contains(espacio);
+                cargados.Add(ensamblado);
+            }
         }
+
+        return cargados.ToImmutable();
     }
 
-    /// <summary>Un tipo público de .NET por su nombre simple, mirando en cada espacio importado en orden.</summary>
-    public static Type? BuscarTipo(string nombre, IEnumerable<string> espacios)
+    /// <summary>Si algún ensamblado del runtime o de las referencias tiene tipos públicos en ese espacio de nombres (o en uno anidado en él).</summary>
+    public static bool ExisteEspacio(string espacio, ImmutableArray<Assembly> referencias = default)
+    {
+        lock (_candado)
+        {
+            _espacios ??= EspaciosDe(Ensamblados);
+            if (_espacios.Contains(espacio))
+            {
+                return true;
+            }
+        }
+
+        return !referencias.IsDefaultOrEmpty && EspaciosDe(referencias).Contains(espacio);
+    }
+
+    private static HashSet<string> EspaciosDe(IEnumerable<Assembly> ensamblados)
+    {
+        var espacios = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var ensamblado in ensamblados)
+        {
+            Type[] tipos;
+            try
+            {
+                tipos = ensamblado.GetExportedTypes();
+            }
+            catch (Exception excepcion) when (excepcion is ReflectionTypeLoadException or FileNotFoundException or TypeLoadException)
+            {
+                continue;
+            }
+
+            foreach (var tipo in tipos)
+            {
+                for (var ns = tipo.Namespace; !string.IsNullOrEmpty(ns); ns = ns.Contains('.') ? ns[..ns.LastIndexOf('.')] : null)
+                {
+                    espacios.Add(ns);
+                }
+            }
+        }
+
+        return espacios;
+    }
+
+    /// <summary>Un tipo público de .NET por su nombre simple, mirando en cada espacio importado en orden: primero el runtime, después las referencias.</summary>
+    public static Type? BuscarTipo(string nombre, IEnumerable<string> espacios, ImmutableArray<Assembly> referencias = default)
     {
         foreach (var espacio in espacios)
         {
@@ -104,6 +148,11 @@ public static class Externos
             if (BuscarPorNombreCompleto(completo) is { } tipo)
             {
                 return tipo;
+            }
+
+            if (!referencias.IsDefaultOrEmpty && BuscarEn(referencias, completo) is { } referenciado)
+            {
+                return referenciado;
             }
         }
 
@@ -120,8 +169,18 @@ public static class Externos
             }
         }
 
-        Type? encontrado = null;
-        foreach (var ensamblado in Ensamblados)
+        var encontrado = BuscarEn(Ensamblados, completo);
+        lock (_candado)
+        {
+            _tiposPorNombre[completo] = encontrado;
+        }
+
+        return encontrado;
+    }
+
+    private static Type? BuscarEn(IEnumerable<Assembly> ensamblados, string completo)
+    {
+        foreach (var ensamblado in ensamblados)
         {
             Type? tipo;
             try
@@ -135,17 +194,11 @@ public static class Externos
 
             if (tipo is { IsPublic: true, IsGenericTypeDefinition: false })
             {
-                encontrado = tipo;
-                break;
+                return tipo;
             }
         }
 
-        lock (_candado)
-        {
-            _tiposPorNombre[completo] = encontrado;
-        }
-
-        return encontrado;
+        return null;
     }
 
     // ----- Traducción de tipos -----

@@ -1,0 +1,14 @@
+// Las clases de Lince son clases de .NET: Newtonsoft.Json las serializa por sus campos públicos.
+
+clase Producto {
+    Nombre: texto;
+    Precio: decimal;
+    Etiquetas: lista<texto>;
+}
+
+funcion catalogo(): lista<Producto> {
+    regresar [
+        nuevo Producto("café", 12.5, ["bebida", "grano"]),
+        nuevo Producto("arroz", 4.8, ["cereal"])
+    ];
+}

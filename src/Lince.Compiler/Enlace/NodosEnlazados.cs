@@ -207,6 +207,28 @@ public sealed record MiembroExternoEnlazado(ExpresionEnlazada? Receptor, System.
     public override TipoLince Tipo { get; } = Tipo;
 }
 
+/// <summary>
+/// <c>objeto[indice]</c> sobre un valor de .NET: un elemento de un arreglo (<paramref name="Elemento"/>
+/// es su tipo) o el indexador <c>get_Item</c> de una clase (<paramref name="Lector"/>).
+/// </summary>
+public sealed record IndiceExternoEnlazado(
+    ExpresionEnlazada Objeto,
+    ImmutableArray<ExpresionEnlazada> Indices,
+    System.Reflection.MethodInfo? Lector,
+    Type? Elemento,
+    TipoLince Tipo) : ExpresionEnlazada
+{
+    public override TipoLince Tipo { get; } = Tipo;
+}
+
+/// <summary><c>objeto[indice] = valor;</c> sobre un arreglo o un indexador de .NET.</summary>
+public sealed record AsignacionIndiceExternaEnlazada(
+    ExpresionEnlazada Objeto,
+    ImmutableArray<ExpresionEnlazada> Indices,
+    System.Reflection.MethodInfo? Escritor,
+    Type? Elemento,
+    ExpresionEnlazada Valor) : SentenciaEnlazada;
+
 /// <summary>Escritura de una propiedad o campo de .NET: <c>objeto.Propiedad = valor;</c>.</summary>
 public sealed record AsignacionExternaEnlazada(ExpresionEnlazada? Receptor, System.Reflection.MemberInfo Miembro, ExpresionEnlazada Valor) : SentenciaEnlazada;
 

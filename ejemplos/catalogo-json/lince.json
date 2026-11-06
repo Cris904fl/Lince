@@ -1,0 +1,8 @@
+{
+  "nombre": "catalogo",
+  "version": "0.1.0",
+  "archivos": ["principal.ln", "modelos.ln"],
+  "paquetes": {
+    "Newtonsoft.Json": "13.0.3"
+  }
+}

@@ -1,0 +1,12 @@
+// Un proyecto con un paquete NuGet: lince restaurar lo descarga y lince ejecutar lo usa.
+importar Newtonsoft.Json;
+importar Newtonsoft.Json.Linq;
+
+funcion principal() {
+    sea json = JsonConvert.SerializeObject(catalogo(), Formatting.Indented);
+    imprimir(json);
+
+    sea arreglo = JArray.Parse(json);
+    imprimir("productos: " + arreglo.Count);
+    imprimir("primero: " + arreglo[0]["Nombre"].ToString());
+}

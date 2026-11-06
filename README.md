@@ -80,10 +80,20 @@ Comandos:
 
 | Comando                                        | Qué hace                                                          |
 | ---------------------------------------------- | ----------------------------------------------------------------- |
-| `lince compilar archivo.ln [--salida carpeta]` | Genera `archivo.dll` y su `runtimeconfig.json` junto al fuente o en la carpeta dada. |
-| `lince ejecutar archivo.ln`                    | Compila a una carpeta temporal y corre el programa.               |
+| `lince nuevo nombre`                           | Crea una carpeta con un `lince.json` y un `principal.ln`.         |
+| `lince restaurar [carpeta]`                    | Descarga los paquetes NuGet del `lince.json` a la caché local.    |
+| `lince compilar archivo.ln \| carpeta [--salida carpeta]` | Genera el `.dll` con su `runtimeconfig.json` (y las DLL de los paquetes) en `salida/` o en la carpeta dada. |
+| `lince ejecutar archivo.ln \| carpeta`         | Compila a una carpeta temporal y corre el programa.               |
 | `lince version`                                | Versión del compilador y del runtime.                             |
 | `lince ayuda`                                  | Resumen de uso.                                                   |
+
+Un archivo suelto es un programa; una carpeta con `lince.json` es un proyecto de varios
+archivos con paquetes NuGet y marcos compartidos ([ejemplos/catalogo-json](ejemplos/catalogo-json)
+usa Newtonsoft.Json):
+
+```powershell
+dotnet run --project src/Lince.Cli -- ejecutar ejemplos/catalogo-json
+```
 
 Códigos de salida: `0` bien, `1` errores de compilación, `2` uso incorrecto; al ejecutar, el que
 devuelva el programa (`principal(): entero`).

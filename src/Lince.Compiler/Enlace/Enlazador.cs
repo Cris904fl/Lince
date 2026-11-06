@@ -47,21 +47,37 @@ public sealed class Enlazador
     private readonly List<LambdaEnlazada> _lambdas = [];
     private int _contadorDeLambdas;
 
-    private Enlazador(BolsaDiagnosticos diagnosticos)
+    /// <summary>Ensamblados de paquetes y marcos del proyecto donde también se buscan tipos.</summary>
+    private readonly ImmutableArray<Assembly> _referencias;
+
+    private Enlazador(BolsaDiagnosticos diagnosticos, ImmutableArray<Assembly> referencias)
     {
         _diagnosticos = diagnosticos;
+        _referencias = referencias;
     }
 
-    public static ProgramaEnlazado Enlazar(ArbolSintaxis arbol, BolsaDiagnosticos diagnosticos)
+    public static ProgramaEnlazado Enlazar(ArbolSintaxis arbol, BolsaDiagnosticos diagnosticos) =>
+        Enlazar([arbol], diagnosticos, []);
+
+    /// <summary>
+    /// Enlaza un programa de uno o varios archivos. Todas las declaraciones del nivel superior
+    /// comparten un solo espacio: una función o un tipo se ve desde cualquier archivo, y los
+    /// <c>importar</c> valen para todos.
+    /// </summary>
+    public static ProgramaEnlazado Enlazar(IEnumerable<ArbolSintaxis> arboles, BolsaDiagnosticos diagnosticos, ImmutableArray<Assembly> referencias)
     {
-        var enlazador = new Enlazador(diagnosticos);
-        return enlazador.EnlazarPrograma(arbol.Raiz);
+        var enlazador = new Enlazador(diagnosticos, referencias);
+        return enlazador.EnlazarPrograma(arboles.Select(a => a.Raiz).ToList());
     }
 
-    private ProgramaEnlazado EnlazarPrograma(ProgramaSintaxis programa)
+    private ProgramaEnlazado EnlazarPrograma(IReadOnlyList<ProgramaSintaxis> programas)
     {
+        var importaciones = programas.SelectMany(p => p.Importaciones).ToList();
+        var declaracionesDeTipos = programas.SelectMany(p => p.Tipos).ToList();
+        var declaracionesDeFunciones = programas.SelectMany(p => p.Funciones).ToList();
+
         // Pasada 0: los espacios de nombres importados de .NET.
-        foreach (var importacion in programa.Importaciones)
+        foreach (var importacion in importaciones)
         {
             if (importacion.Partes.Any(p => p.EsFaltante))
             {
@@ -69,10 +85,10 @@ public sealed class Enlazador
             }
 
             var espacio = importacion.Espacio;
-            if (!Externos.ExisteEspacio(espacio))
+            if (!Externos.ExisteEspacio(espacio, _referencias))
             {
                 _diagnosticos.Error(Codigos.EspacioNoExiste, importacion.Ubicacion,
-                    $"no se encontró el espacio de nombres '{espacio}' en .NET; revise la mayúscula inicial de cada parte (System.Text, System.IO)");
+                    $"no se encontró el espacio de nombres '{espacio}' en .NET ni en los paquetes del proyecto; revise la mayúscula inicial de cada parte (System.Text, System.IO)");
                 continue;
             }
 
@@ -83,18 +99,18 @@ public sealed class Enlazador
         }
 
         // Pasada 1: nombres de tipos, para que los campos y las firmas puedan referirse a ellos.
-        foreach (var tipo in programa.Tipos)
+        foreach (var tipo in declaracionesDeTipos)
         {
             DeclararTipo(tipo);
         }
 
         // Pasada 2: funciones libres y miembros de cada tipo.
-        foreach (var funcion in programa.Funciones)
+        foreach (var funcion in declaracionesDeFunciones)
         {
             DeclararFuncion(funcion);
         }
 
-        foreach (var tipo in programa.Tipos)
+        foreach (var tipo in declaracionesDeTipos)
         {
             if (TipoDeclarado(tipo) is { } simbolo)
             {
@@ -102,11 +118,11 @@ public sealed class Enlazador
             }
         }
 
-        var principal = ComprobarPrincipal(programa);
+        var principal = ComprobarPrincipal(programas[0]);
 
         // Pasada 3: cuerpos.
         var funciones = ImmutableArray.CreateBuilder<FuncionEnlazada>();
-        foreach (var funcion in programa.Funciones)
+        foreach (var funcion in declaracionesDeFunciones)
         {
             if (!funcion.Nombre.EsFaltante && _funciones.TryGetValue(funcion.Nombre.Texto, out var simbolo) && simbolo.Declaracion == funcion)
             {
@@ -120,7 +136,7 @@ public sealed class Enlazador
         }
 
         var tipos = ImmutableArray.CreateBuilder<TipoEnlazado>();
-        foreach (var tipo in programa.Tipos)
+        foreach (var tipo in declaracionesDeTipos)
         {
             if (TipoDeclarado(tipo) is { } simbolo)
             {
@@ -357,7 +373,7 @@ public sealed class Enlazador
             }
 
             // Un tipo de .NET de los espacios importados, visto como lo ve Lince.
-            if (Externos.BuscarTipo(tipo.Palabra.Texto, _espacios) is { } externo)
+            if (Externos.BuscarTipo(tipo.Palabra.Texto, _espacios, _referencias) is { } externo)
             {
                 return Externos.ALince(externo) ?? TipoLince.Externo(externo);
             }
@@ -405,7 +421,7 @@ public sealed class Enlazador
         if (!_funciones.TryGetValue(NombreDePrincipal, out var principal))
         {
             _diagnosticos.Error(Codigos.FaltaPrincipal, new Ubicacion(programa.Archivo, 0, 0),
-                "el programa no tiene una función 'principal'; es el punto de entrada y debe existir");
+                "el programa no tiene una función 'principal'; es el punto de entrada y debe existir (en alguno de sus archivos)");
             return null;
         }
 
@@ -1057,7 +1073,13 @@ public sealed class Enlazador
                 break;
 
             case IndiceSintaxis indice:
-                if (EnlazarIndice(indice) is not IndiceEnlazado indiceEnlazado)
+                var lectura = EnlazarIndice(indice);
+                if (lectura is IndiceExternoEnlazado externa)
+                {
+                    return EnlazarAsignacionIndiceExterna(externa, asignacion, indice);
+                }
+
+                if (lectura is not IndiceEnlazado indiceEnlazado)
                 {
                     EnlazarExpresion(asignacion.Valor);
                     return new ExpresionSentenciaEnlazada(new ErrorEnlazado());
@@ -1436,7 +1458,7 @@ public sealed class Enlazador
         }
 
         // Un tipo de .NET por su nombre: solo sirve como receptor de sus miembros estáticos.
-        if (!_tipos.ContainsKey(nombre.Identificador.Texto) && Externos.BuscarTipo(nombre.Identificador.Texto, _espacios) is { } externo)
+        if (!_tipos.ContainsKey(nombre.Identificador.Texto) && Externos.BuscarTipo(nombre.Identificador.Texto, _espacios, _referencias) is { } externo)
         {
             return new TipoComoReceptorEnlazado(TipoLince.Externo(externo));
         }
@@ -2261,6 +2283,99 @@ public sealed class Enlazador
         return (mejor, argumentos.MoveToImmutable());
     }
 
+    /// <summary><c>arreglo[i]</c> de .NET (el elemento, con su tipo traducido) o <c>objeto[clave]</c> por su indexador <c>get_Item</c>.</summary>
+    private ExpresionEnlazada EnlazarIndiceExterno(ExpresionEnlazada objeto, TipoExterno externo, IndiceSintaxis indice, ExpresionEnlazada posicion)
+    {
+        var clr = externo.TipoClr;
+        if (clr.IsArray && clr.GetArrayRank() == 1)
+        {
+            var elemento = clr.GetElementType()!;
+            var tipo = Externos.ALince(elemento);
+            if (tipo is null)
+            {
+                _diagnosticos.Error(Codigos.MiembroExternoNoAdmitido, indice.CorcheteAbre.Ubicacion,
+                    $"los elementos de '{clr.Name}' son de tipo '{elemento.Name}', que Lince no puede usar en esta versión");
+                return new ErrorEnlazado();
+            }
+
+            posicion = Convertir(posicion, TipoLince.Entero, indice.Indice.Ubicacion,
+                origen => $"el índice de un arreglo debe ser 'entero' y este es '{origen}'");
+            return posicion.Tipo.EsError ? new ErrorEnlazado() : new IndiceExternoEnlazado(objeto, [posicion], null, elemento, tipo);
+        }
+
+        var lectores = clr.GetMethods(MiembrosPublicos | BindingFlags.Instance).Where(m => m.Name == "get_Item").Cast<MethodBase>().ToList();
+        if (lectores.Count == 0)
+        {
+            _diagnosticos.Error(Codigos.NoSePuedeIndexar, indice.CorcheteAbre.Ubicacion,
+                $"el tipo de .NET '{clr.Name}' no tiene indexador: no se puede escribir {clr.Name}[...]");
+            return new ErrorEnlazado();
+        }
+
+        var eleccion = ResolverSobrecarga(lectores, [indice.Indice], $"{clr.Name}[...]", indice.Ubicacion);
+        if (eleccion is null)
+        {
+            return new ErrorEnlazado();
+        }
+
+        var lector = (MethodInfo)eleccion.Value.Metodo;
+        var retorno = Externos.ALince(lector.ReturnType);
+        if (retorno is null)
+        {
+            _diagnosticos.Error(Codigos.MiembroExternoNoAdmitido, indice.CorcheteAbre.Ubicacion,
+                $"'{clr.Name}[...]' devuelve '{lector.ReturnType.Name}', que Lince no puede usar en esta versión");
+            return new ErrorEnlazado();
+        }
+
+        return new IndiceExternoEnlazado(objeto, eleccion.Value.Argumentos, lector, null, retorno);
+    }
+
+    /// <summary><c>arreglo[i] = valor;</c> o <c>objeto[clave] = valor;</c> por su <c>set_Item</c>.</summary>
+    private SentenciaEnlazada EnlazarAsignacionIndiceExterna(IndiceExternoEnlazado lectura, AsignacionSintaxis asignacion, IndiceSintaxis indice)
+    {
+        var valor = EnlazarExpresion(asignacion.Valor, asignacion.Operador.Tipo == TipoToken.Igual ? lectura.Tipo : null);
+        if (asignacion.Operador.Tipo != TipoToken.Igual)
+        {
+            var operador = asignacion.Operador.Tipo switch
+            {
+                TipoToken.MasIgual => TipoToken.Mas,
+                TipoToken.MenosIgual => TipoToken.Menos,
+                TipoToken.AsteriscoIgual => TipoToken.Asterisco,
+                TipoToken.BarraIgual => TipoToken.Barra,
+                _ => TipoToken.Porcentaje,
+            };
+            valor = EnlazarBinaria(lectura, operador, valor, asignacion.Operador.Ubicacion);
+        }
+
+        if (lectura.Elemento is not null)
+        {
+            valor = Convertir(valor, lectura.Tipo, asignacion.Valor.Ubicacion,
+                origen => $"no se puede guardar un valor de tipo '{origen}' en un arreglo de '{lectura.Tipo}'");
+            return valor.Tipo.EsError
+                ? new ExpresionSentenciaEnlazada(new ErrorEnlazado())
+                : new AsignacionIndiceExternaEnlazada(lectura.Objeto, lectura.Indices, null, lectura.Elemento, valor);
+        }
+
+        var clr = ((TipoExterno)lectura.Objeto.Tipo).TipoClr;
+        var escritores = clr.GetMethods(MiembrosPublicos | BindingFlags.Instance)
+            .Where(m => m.Name == "set_Item" && m.GetParameters().Length == lectura.Indices.Length + 1)
+            .ToList();
+        var escritor = escritores.FirstOrDefault(m => m.GetParameters().Take(lectura.Indices.Length)
+            .Select(p => p.ParameterType).SequenceEqual(lectura.Lector!.GetParameters().Select(p => p.ParameterType)));
+        if (escritor is null)
+        {
+            _diagnosticos.Error(Codigos.MiembroDeSoloLectura, indice.CorcheteAbre.Ubicacion,
+                $"el indexador de '{clr.Name}' es de solo lectura");
+            return new ExpresionSentenciaEnlazada(new ErrorEnlazado());
+        }
+
+        var tipoValor = Externos.ALince(escritor.GetParameters()[^1].ParameterType) ?? TipoLince.Error;
+        valor = Convertir(valor, tipoValor, asignacion.Valor.Ubicacion,
+            origen => $"no se puede guardar un valor de tipo '{origen}' en '{clr.Name}[...]', que es de tipo '{tipoValor}'");
+        return valor.Tipo.EsError
+            ? new ExpresionSentenciaEnlazada(new ErrorEnlazado())
+            : new AsignacionIndiceExternaEnlazada(lectura.Objeto, lectura.Indices, escritor, null, valor);
+    }
+
     private ExpresionEnlazada EnlazarNuevoExterno(TipoExterno tipo, NuevoSintaxis nuevo)
     {
         var candidatos = tipo.TipoClr.GetConstructors(BindingFlags.Public | BindingFlags.Instance).Cast<MethodBase>().ToList();
@@ -2568,11 +2683,16 @@ public sealed class Enlazador
             return new ErrorEnlazado();
         }
 
+        if (objeto.Tipo is TipoExterno externo)
+        {
+            return EnlazarIndiceExterno(objeto, externo, indice, posicion);
+        }
+
         if (objeto.Tipo is not TipoGenerico coleccion)
         {
             var pista = objeto.Tipo.EsTextual ? "; para un trozo de texto use .subtexto(inicio, longitud)" : "";
             _diagnosticos.Error(Codigos.NoSePuedeIndexar, indice.CorcheteAbre.Ubicacion,
-                $"no se puede indexar un valor de tipo '{objeto.Tipo}'; solo las listas y los mapas llevan [ ]{pista}");
+                $"no se puede indexar un valor de tipo '{objeto.Tipo}'; solo las listas, los mapas y los arreglos e indexadores de .NET llevan [ ]{pista}");
             return new ErrorEnlazado();
         }
 

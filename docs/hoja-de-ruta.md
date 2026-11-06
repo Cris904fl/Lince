@@ -81,15 +81,25 @@ La fase técnica más dura del proyecto y la que más devuelve: a partir de aqu�
 - Los tipos se buscan por reflexión en el runtime del compilador (los `System.*` de la
   carpeta del runtime), que es el mismo contra el que se emite.
 
-**4b, pendiente:**
+**4b, proyectos y paquetes (hecha, 2026-11-06):**
 
-- Un archivo de proyecto mínimo (`lince.json`) con nombre, versión, archivos y paquetes
-  NuGet; `lince restaurar` que los descarga y los hace visibles a `importar`.
-- Varios archivos por programa: `modulo` e `importar` entre módulos propios.
+- `lince.json` con nombre, versión, archivos, paquetes NuGet y marcos compartidos
+  (`Microsoft.AspNetCore.App`); `lince nuevo`, `lince restaurar`, y `compilar`/`ejecutar`
+  sobre una carpeta o un archivo con proyecto.
+- Restaurador propio sobre la API v3 de nuget.org: descarga a `%LOCALAPPDATA%\lince\paquetes`,
+  resuelve dependencias por su versión mínima, elige la carpeta `lib/` más cercana a .NET 10 y
+  copia las DLL junto al programa. Los marcos compartidos van al `runtimeconfig.json`.
+- Programas de varios archivos con un solo espacio de nombres: funciones, tipos e
+  `importar` se ven desde cualquier archivo.
+
+**Queda para más adelante:**
+
 - Emitir contra ensamblados de referencia (`MetadataLoadContext`) en vez de contra el runtime
   del compilador; es lo que permite apuntar a un `net9.0` o `net10.0` concreto y publicar.
+- `modulo` para separar espacios de nombres entre archivos propios.
 - Métodos genéricos de .NET, indexadores, eventos, `params`, métodos de extensión, `ref`/`out`;
   las anotaciones de nulabilidad de .NET; las clases de Lince como argumentos tipados hacia .NET.
+- Paquetes con versiones preliminares o contenido nativo; un archivo de bloqueo de versiones.
 - `leer()` y argumentos de `principal`.
 
 ## Fase 5: librería estándar en español

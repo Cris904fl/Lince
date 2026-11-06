@@ -439,8 +439,9 @@ con mayúsculas como en .NET. `importar Espacio.De.Nombres;` hace visibles sus t
 
 - **Qué se puede hacer.** Llamar métodos estáticos y de instancia, crear objetos y
   estructuras con `nuevo`, leer y escribir propiedades y campos, usar las constantes y las
-  enumeraciones (`DayOfWeek.Friday`), pasar lambdas donde .NET espera un `Func` o `Action`,
-  y usar tipos de .NET como tipo de variables, parámetros, campos y retornos. Los parámetros
+  enumeraciones (`DayOfWeek.Friday`), pasar lambdas donde .NET espera cualquier delegado,
+  indexar arreglos (`lineas[0]`) y objetos con indexador (`arreglo[0]["Nombre"]`), y usar
+  tipos de .NET como tipo de variables, parámetros, campos y retornos. Los parámetros
   opcionales de .NET se pueden omitir.
 - **Sobrecargas.** Se elige la que mejor encaja con los tipos de los argumentos; si varias
   encajan igual, la primera que declara .NET. Si ninguna encaja, el error `LN3063` lista las
@@ -458,13 +459,43 @@ con mayúsculas como en .NET. `importar Espacio.De.Nombres;` hace visibles sus t
 - **Un nombre de tipo no es un valor** (`sea m = Math;` es `LN3061`): solo sirve como
   receptor de miembros estáticos o con `nuevo`.
 - **Todavía no**: métodos genéricos de .NET (salvo los que Lince envuelve, como `filtrar`),
-  indexadores, eventos, `params`, métodos de extensión, `ref`/`out`, y tipos cuyos miembros
-  usan tipos que Lince no traduce (`LN3064`). Las clases de Lince pasan a .NET solo como
-  `object`.
+  eventos, `params`, métodos de extensión, `ref`/`out`, y tipos cuyos miembros usan tipos
+  que Lince no traduce (`LN3064`). Las clases de Lince pasan a .NET solo como `object`.
 
 Los tipos básicos de Lince (`texto`, `entero`, `decimal`, las listas y los mapas) exponen,
 además de sus miembros en español, los del tipo de .NET que los respalda: si un nombre no
 está en la tabla de Lince se busca en .NET (`"abc".ToUpper()`, `numeros.Sort()`).
+
+### 3.8 Proyectos: varios archivos, paquetes y marcos
+
+Un archivo `.ln` suelto es un programa. Una carpeta con un `lince.json` es un **proyecto**:
+
+```json
+{
+  "nombre": "catalogo",
+  "version": "0.1.0",
+  "archivos": ["principal.ln", "modelos.ln"],
+  "paquetes": { "Newtonsoft.Json": "13.0.3" },
+  "marcos": ["Microsoft.AspNetCore.App"]
+}
+```
+
+- **`archivos`**: los que forman el programa, en orden; si falta, todos los `.ln` de la
+  carpeta. Todos comparten un único espacio: una función, una clase o un `importar` escritos
+  en un archivo se ven desde los demás, y `principal` va en uno de ellos. Dos declaraciones
+  con el mismo nombre en archivos distintos son el mismo error que en uno solo.
+- **`paquetes`**: paquetes NuGet con su versión mínima (`13.0.3`, o un rango como
+  `[13.0.0, )`). `lince restaurar` los descarga de nuget.org con sus dependencias a una caché
+  local (`%LOCALAPPDATA%\lince\paquetes`), `importar` ve sus espacios de nombres, y al
+  compilar sus DLL se copian junto al programa. Las dependencias que ya trae el runtime
+  (`System.*`) no se descargan.
+- **`marcos`**: marcos compartidos de .NET instalados junto al runtime
+  (`Microsoft.AspNetCore.App`, `Microsoft.WindowsDesktop.App`). Sus tipos se pueden importar
+  y el programa los pide al arrancar; no se copia nada.
+
+`lince nuevo <nombre>` crea la carpeta con un `lince.json` y un `principal.ln`;
+`lince compilar <carpeta>` y `lince ejecutar <carpeta>` (o un archivo de la carpeta, o nada
+desde dentro de ella) compilan el proyecto entero, restaurando antes si falta algún paquete.
 
 ## 4. Declaraciones
 

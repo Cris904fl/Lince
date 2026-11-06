@@ -708,6 +708,30 @@ public static class EmisorIl
                     _il.Emit(OpCodes.Callvirt, MetodoDeColeccion(asignacion.Objeto.Tipo, Colecciones.ListaEscribir, Colecciones.MapaEscribir));
                     break;
 
+                case AsignacionIndiceExternaEnlazada asignacion:
+                    if (asignacion.Elemento is not null)
+                    {
+                        EmitirExpresion(asignacion.Objeto);
+                        EmitirExpresion(asignacion.Indices[0]);
+                        _il.Emit(OpCodes.Conv_I4);
+                        EmitirArgumentoAlLimite(asignacion.Valor, asignacion.Elemento);
+                        _il.Emit(OpCodes.Stelem, asignacion.Elemento);
+                        break;
+                    }
+
+                    {
+                        EmitirReceptorExterno(asignacion.Objeto, asignacion.Escritor!.DeclaringType!);
+                        var parametros = asignacion.Escritor.GetParameters();
+                        for (var i = 0; i < asignacion.Indices.Length; i++)
+                        {
+                            EmitirArgumentoAlLimite(asignacion.Indices[i], parametros[i].ParameterType);
+                        }
+
+                        EmitirArgumentoAlLimite(asignacion.Valor, parametros[^1].ParameterType);
+                        EmitirLlamadaExterna(asignacion.Escritor, asignacion.Objeto);
+                        break;
+                    }
+
                 case AsignacionExternaEnlazada asignacion:
                     if (asignacion.Receptor is not null)
                     {
@@ -982,6 +1006,30 @@ public static class EmisorIl
 
                 case TipoComoReceptorEnlazado receptor:
                     throw new InvalidOperationException($"'{receptor.TipoExterno.Nombre}' es un tipo y no se puede emitir como valor; el enlazador debió informarlo.");
+
+                case IndiceExternoEnlazado indice:
+                    if (indice.Elemento is not null)
+                    {
+                        EmitirExpresion(indice.Objeto);
+                        EmitirExpresion(indice.Indices[0]);
+                        _il.Emit(OpCodes.Conv_I4);
+                        _il.Emit(OpCodes.Ldelem, indice.Elemento);
+                        AjustarResultadoDelLimite(indice.Elemento, indice.Tipo);
+                        break;
+                    }
+
+                    {
+                        EmitirReceptorExterno(indice.Objeto, indice.Lector!.DeclaringType!);
+                        var parametros = indice.Lector.GetParameters();
+                        for (var i = 0; i < indice.Indices.Length; i++)
+                        {
+                            EmitirArgumentoAlLimite(indice.Indices[i], parametros[i].ParameterType);
+                        }
+
+                        EmitirLlamadaExterna(indice.Lector, indice.Objeto);
+                        AjustarResultadoDelLimite(indice.Lector.ReturnType, indice.Tipo);
+                        break;
+                    }
 
                 case LlamadaExternaEnlazada llamada:
                     {
