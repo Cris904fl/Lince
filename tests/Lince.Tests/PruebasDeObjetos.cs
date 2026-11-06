@@ -132,7 +132,8 @@ public class PruebasDeObjetos : IDisposable
                 var p = nuevo Punto(1, 2);
                 p.x = 5;
                 imprimir(c.titular + c.verSaldo() + p.suma());
-                si c == nulo || c != c { }
+                sea d: Cuenta? = c;
+                si d == nulo || c != c { }
             }
             """);
 
@@ -158,9 +159,9 @@ public class PruebasDeObjetos : IDisposable
     }
 
     [Theory]
-    [InlineData("sea c: Cuenta = nulo;")]
-    [InlineData("sea c = nuevo Cuenta(\"a\"); sea d: Cuenta = c; si d == c { }")]
-    public void Una_clase_admite_nulo_y_se_compara_por_identidad(string cuerpo)
+    [InlineData("sea c: Cuenta? = nulo;")]
+    [InlineData("sea c = nuevo Cuenta(\"a\"); sea d: Cuenta? = c; si d == c { }")]
+    public void Una_clase_nulable_admite_nulo_y_se_compara_por_identidad(string cuerpo)
     {
         var (_, diagnosticos) = Enlazar($"{Cuenta}\nfuncion principal() {{ {cuerpo} }}");
 
@@ -410,7 +411,7 @@ public class PruebasDeObjetos : IDisposable
         var resultado = Ejecutar("""
             clase Nodo {
                 valor: entero;
-                siguiente: Nodo;
+                siguiente: Nodo?;
 
                 funcion nuevo(valor: entero) {
                     este.valor = valor;
@@ -418,13 +419,13 @@ public class PruebasDeObjetos : IDisposable
                 }
             }
 
-            funcion agregar(cabeza: Nodo, valor: entero): Nodo {
+            funcion agregar(cabeza: Nodo?, valor: entero): Nodo {
                 sea nuevoNodo = nuevo Nodo(valor);
                 nuevoNodo.siguiente = cabeza;
                 regresar nuevoNodo;
             }
 
-            funcion suma(nodo: Nodo): entero {
+            funcion suma(nodo: Nodo?): entero {
                 var total = 0;
                 var actual = nodo;
                 mientras actual != nulo {
@@ -435,7 +436,7 @@ public class PruebasDeObjetos : IDisposable
             }
 
             funcion principal() {
-                var cabeza: Nodo = nulo;
+                var cabeza: Nodo? = nulo;
                 para i en 1..5 {
                     cabeza = agregar(cabeza, i);
                 }

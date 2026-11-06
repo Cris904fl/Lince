@@ -70,7 +70,7 @@ Un literal `entero` que no cabe en 64 bits es un error (`LN1003`).
 ### 1.5 Signos y operadores
 
 ```
-( ) { } , ; : . ..
+( ) { } , ; : . .. ?
 + - * / %
 = += -= *= /= %=
 == != < <= > >=
@@ -88,7 +88,7 @@ declaracion_funcion  = [ modificador ] "funcion" ( identificador | "nuevo" )
                        "(" [ parametros ] ")" [ ":" tipo ] bloque ;
 parametros           = parametro { "," parametro } ;
 parametro            = identificador ":" tipo ;
-tipo                 = "entero" | "decimal" | "texto" | "logico" | "nada" | identificador ;
+tipo                 = ( "entero" | "decimal" | "texto" | "logico" | "nada" | identificador ) [ "?" ] ;
 
 declaracion_tipo     = ( "clase" | "estructura" ) identificador "{" { miembro } "}" ;
 miembro              = campo | declaracion_funcion ;
@@ -146,7 +146,7 @@ Observaciones:
 | --------- | --------------- | ------------------------------------------------------- |
 | `entero`  | `System.Int64`  | Entero con signo de 64 bits. La aritmética no comprueba desbordamiento. |
 | `decimal` | `System.Double` | Punto flotante de 64 bits (IEEE 754).                   |
-| `texto`   | `System.String` | Cadena inmutable Unicode. Puede valer `nulo`.           |
+| `texto`   | `System.String` | Cadena inmutable Unicode. Nunca es `nulo`; `texto?` sí puede serlo (3.3). |
 | `logico`  | `System.Boolean`| `verdadero` o `falso`.                                  |
 | `nada`    | `void`          | Solo como tipo de retorno; una función sin `: tipo` regresa `nada`. |
 
@@ -162,8 +162,11 @@ Solo existen dos:
 
 - `entero` → `decimal`, en asignaciones, argumentos, valores de retorno y operandos mixtos
   (`2 * 1.5` es `decimal`).
-- `nulo` → `texto` o cualquier clase. Las estructuras y los demás tipos básicos no admiten
-  `nulo` (`LN3027`).
+- `T` → `T?`: un valor que nunca es nulo cabe donde se admite nulo. Lo contrario, `T?` → `T`,
+  no es una conversión: lo decide el análisis de flujo (3.3).
+
+`nulo` solo cabe en un tipo nulable (`texto?`, `Cuenta?`); en cualquier otro es el error
+`LN3027`.
 
 Cualquier otra conversión es un error de tipos. No hay conversión implícita de número a texto
 salvo en la concatenación (3.2).
@@ -176,8 +179,8 @@ salvo en la concatenación (3.2).
 | `+ - * / %`          | `decimal` o `entero` mezclados      | `decimal` |
 | `+`                  | `texto` con `texto`, `entero`, `decimal` o `logico` (en cualquier orden) | `texto` (concatenación) |
 | `< <= > >=`          | numéricos                           | `logico`  |
-| `== !=`              | dos del mismo tipo básico (`nulo` cuenta como `texto`) | `logico`  |
-| `== !=`              | dos referencias de la misma clase, o una y `nulo`: compara identidad, no contenido | `logico` |
+| `== !=`              | dos del mismo tipo básico, con o sin `?`; `texto?` con `nulo` | `logico`  |
+| `== !=`              | dos referencias de la misma clase (con o sin `?`), o una `Clase?` y `nulo`: compara identidad, no contenido | `logico` |
 | `&& \|\|`            | `logico`, `logico`; evaluación en cortocircuito | `logico` |
 | `!` unario           | `logico`                            | `logico`  |
 | `-` unario           | numérico                            | el mismo  |
@@ -185,10 +188,62 @@ salvo en la concatenación (3.2).
 La división entera trunca hacia cero y dividir un `entero` entre cero lanza la excepción de .NET
 `DivideByZeroException`. `/` entre `decimal` sigue IEEE 754 (`1.0 / 0.0` es infinito).
 
-En la concatenación, los números se convierten con la cultura invariante (`2.5`, no `2,5`) y los
-lógicos se escriben `verdadero` o `falso`. Las estructuras no se comparan con `==` y ni ellas ni
-las clases se concatenan ni se imprimen directamente: escriba un método que las convierta a
-`texto`.
+En la concatenación, los números se convierten con la cultura invariante (`2.5`, no `2,5`), los
+lógicos se escriben `verdadero` o `falso` y un `texto?` nulo se escribe vacío. Las estructuras no
+se comparan con `==` y ni ellas ni las clases se concatenan ni se imprimen directamente: escriba
+un método que las convierta a `texto`.
+
+Comparar con `nulo` una expresión cuyo tipo no lleva `?` es un error (`LN3043`): o sobra la
+comparación o falta el `?` en la declaración.
+
+### 3.3 Tipos nulables y análisis de flujo
+
+Un tipo por referencia (`texto` o una clase) seguido de `?` admite además el valor `nulo`:
+`texto?`, `Nodo?`. Los tipos por valor (`entero`, `logico`, las estructuras) no admiten `?` en
+esta versión (`LN3044`).
+
+Un `T?` no se puede usar donde se espera un `T` (`LN3041`) ni se le pueden leer campos o
+llamar métodos (`LN3042`)... salvo en los puntos del cuerpo donde el compilador sabe que no es
+nulo. Lo sabe por el **análisis de flujo**:
+
+```
+funcion largo(nombre: texto?): entero {
+    si nombre == nulo {
+        regresar 0;
+    }
+    // Aquí 'nombre' es texto: la rama de arriba regresó.
+    regresar medir(nombre);
+}
+
+sea nodo = buscar(30);          // Nodo?
+si nodo != nulo {
+    imprimir(nodo.valor);       // Nodo
+}
+si nodo != nulo && nodo.valor > 10 { }     // el && evalúa la derecha solo si la izquierda fue cierta
+si nodo == nulo || nodo.valor > 10 { }     // el || evalúa la derecha solo si la izquierda fue falsa
+mientras nodo != nulo {
+    nodo = nodo.siguiente;      // Nodo? otra vez, hasta la siguiente comprobación
+}
+```
+
+Reglas:
+
+- Una comprobación `x != nulo` hace que `x` sea `T` dentro del `si` (o del `mientras`) y, si
+  es `x == nulo`, dentro del `sino`. Con `!` se invierte; con `&&` y `||` se combina como
+  cabe esperar.
+- Si una rama de un `si` termina con `regresar` (por todos sus caminos), lo que se sabía en
+  la otra rama vale para el resto del cuerpo. Tras un `mientras x == nulo { }` sin `romper`,
+  `x` no es nulo.
+- `x` puede ser una variable, un parámetro, `este.campo`, un campo nombrado a secas o una
+  cadena `a.b.c`. Asignar a `x` (o a cualquier prefijo de la cadena) borra lo que se sabía;
+  si lo asignado nunca es nulo (`x = nuevo Nodo(1)`), `x` pasa a saberse no nulo.
+- Un ciclo olvida, antes de empezar, todo lo que su cuerpo asigna: en la segunda vuelta la
+  variable trae lo que le puso la primera.
+- Las llamadas a métodos no invalidan lo sabido sobre los campos: es la misma apuesta que hace
+  C#, a cambio de no exigir comprobaciones repetidas.
+
+Un `T?` que se sabe no nulo se puede guardar en una variable `T`, pasar a un parámetro `T` o
+regresar de una función `T`.
 
 ## 4. Declaraciones
 
@@ -231,6 +286,7 @@ reasignarse. Ambas exigen un valor inicial. El tipo puede escribirse o inferirse
 ```
 sea limite = 10;              // entero, inferido
 var acumulado: decimal = 0;   // decimal, el 0 se convierte
+var apodo: texto? = nulo;     // texto?, puede ser nulo
 var nombre = nulo;            // error LN3029: nulo no basta para inferir; escriba el tipo
 ```
 
@@ -289,8 +345,8 @@ las funciones, se ven en todo el archivo sin importar el orden.
 
 - **Clase o estructura.** Una clase es un tipo por referencia: `sea b = a;` hace que `a` y `b`
   sean el mismo objeto, y `==` compara identidad. Una estructura es un tipo por valor:
-  `sea b = a;` copia, y cambiar `b` no toca a `a`. Las clases admiten `nulo`; las estructuras,
-  no. Se emiten como clases y `struct` de .NET.
+  `sea b = a;` copia, y cambiar `b` no toca a `a`. Una clase con `?` admite `nulo` (3.3); una
+  estructura, nunca. Se emiten como clases y `struct` de .NET.
 - **Construcción.** `nuevo Tipo(argumentos)`. Si el tipo declara `funcion nuevo(...)`, ese es su
   constructor y define los argumentos; si no, los argumentos son los campos **sin** valor
   inicial, en orden de declaración (`nuevo Punto(3, 4)`). Los valores iniciales de los campos se
@@ -312,10 +368,7 @@ las funciones, se ven en todo el archivo sin importar el orden.
   método que modifica una estructura actúa sobre el original cuando esta está en una variable
   `var` o en un campo.
 - **Parámetros y retornos.** Los objetos se pasan y se regresan como cualquier otro valor; un
-  campo puede ser de un tipo declarado (incluido el propio, en una clase).
-
-Pendiente para el cierre de la fase 2: tipos nulables explícitos (`Cuenta?`) con análisis de
-flujo, para que una clase sin `?` nunca sea `nulo`.
+  campo puede ser de un tipo declarado (incluido el propio, en una clase: `siguiente: Nodo?`).
 
 ## 5. Sentencias
 

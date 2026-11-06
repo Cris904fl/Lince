@@ -26,6 +26,13 @@ public sealed class Enlazador
     private TipoUsuario? _tipoActual;
     private int _profundidadDeCiclo;
 
+    /// <summary>
+    /// Rutas (variable, o variable.campo.campo) que en el punto actual del cuerpo se sabe que
+    /// no son nulas, por una comprobación anterior o una asignación de un valor no nulo. Es el
+    /// estado del análisis de flujo de nulidad.
+    /// </summary>
+    private ImmutableHashSet<string> _noNulos = [];
+
     private Enlazador(BolsaDiagnosticos diagnosticos)
     {
         _diagnosticos = diagnosticos;
@@ -255,6 +262,24 @@ public sealed class Enlazador
 
     private TipoLince ResolverTipo(TipoSintaxis tipo)
     {
+        var baseTipo = ResolverTipoBase(tipo);
+        if (!tipo.EsNulable || baseTipo.EsError)
+        {
+            return baseTipo;
+        }
+
+        if (!baseTipo.EsReferencia)
+        {
+            _diagnosticos.Error(Codigos.NulableDeValor, tipo.Ubicacion,
+                $"'{baseTipo}?' no se admite en esta versión: solo 'texto' y las clases pueden ser nulables");
+            return TipoLince.Error;
+        }
+
+        return TipoLince.Nulable(baseTipo);
+    }
+
+    private TipoLince ResolverTipoBase(TipoSintaxis tipo)
+    {
         if (tipo.Palabra.EsFaltante)
         {
             return TipoLince.Error;
@@ -267,7 +292,7 @@ public sealed class Enlazador
                 return usuario;
             }
 
-            _diagnosticos.Error(Codigos.TipoNoExiste, tipo.Ubicacion, $"no existe un tipo llamado '{tipo.Palabra.Texto}'");
+            _diagnosticos.Error(Codigos.TipoNoExiste, tipo.Palabra.Ubicacion, $"no existe un tipo llamado '{tipo.Palabra.Texto}'");
             return TipoLince.Error;
         }
 
@@ -309,6 +334,7 @@ public sealed class Enlazador
         _funcionActual = simbolo;
         _tipoActual = simbolo.TipoContenedor;
         _profundidadDeCiclo = 0;
+        _noNulos = [];
         _ambito = new Ambito(null);
         foreach (var parametro in simbolo.Parametros)
         {
@@ -438,7 +464,164 @@ public sealed class Enlazador
 
         var variable = new SimboloVariable(declaracion.Nombre.Texto, tipo, declaracion.EsMutable, ClaseDeVariable.Local);
         DeclararVariable(variable, declaracion.Nombre);
+        AnotarAsignacion(RutaDeVariable(variable), tipo, valor);
         return new DeclaracionVariableEnlazada(variable, valor);
+    }
+
+    // ----- Análisis de flujo de nulidad -----
+
+    /// <summary>
+    /// Lo que una condición enseña sobre la nulidad: las rutas que no son nulas si la
+    /// condición es verdadera y las que no lo son si es falsa.
+    /// </summary>
+    private readonly record struct Hechos(ImmutableHashSet<string> SiVerdadero, ImmutableHashSet<string> SiFalso)
+    {
+        public static readonly Hechos Nada = new([], []);
+    }
+
+    private static string RutaDeVariable(SimboloVariable variable) =>
+        "v" + System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(variable);
+
+    /// <summary>La ruta de una expresión enlazada que nombra un sitio (variable, este, o campo de un sitio); null si es un valor cualquiera.</summary>
+    private static string? Ruta(ExpresionEnlazada expresion) => expresion switch
+    {
+        VariableEnlazada variable => RutaDeVariable(variable.Variable),
+        EsteEnlazado => "este",
+        CampoEnlazado campo => Ruta(campo.Objeto) is { } objeto ? objeto + "." + campo.Campo.Nombre : null,
+        ConversionEnlazada conversion => Ruta(conversion.Expresion),
+        _ => null,
+    };
+
+    /// <summary>La misma ruta, calculada desde la sintaxis con los nombres visibles en este punto.</summary>
+    private string? RutaDeSintaxis(ExpresionSintaxis expresion) => expresion switch
+    {
+        ParentesisSintaxis parentesis => RutaDeSintaxis(parentesis.Expresion),
+        EsteSintaxis => "este",
+        NombreSintaxis nombre when _ambito.Buscar(nombre.Identificador.Texto) is { } variable => RutaDeVariable(variable),
+        NombreSintaxis nombre when _tipoActual?.BuscarCampo(nombre.Identificador.Texto) is not null => "este." + nombre.Identificador.Texto,
+        MiembroSintaxis miembro => RutaDeSintaxis(miembro.Objeto) is { } objeto ? objeto + "." + miembro.Nombre.Texto : null,
+        _ => null,
+    };
+
+    /// <summary>Qué enseña una condición sobre la nulidad, leída de su sintaxis.</summary>
+    private Hechos HechosDe(ExpresionSintaxis condicion)
+    {
+        switch (condicion)
+        {
+            case ParentesisSintaxis parentesis:
+                return HechosDe(parentesis.Expresion);
+
+            case UnariaSintaxis { Operador.Tipo: TipoToken.Negacion } negacion:
+                var interior = HechosDe(negacion.Operando);
+                return new Hechos(interior.SiFalso, interior.SiVerdadero);
+
+            case BinariaSintaxis { Operador.Tipo: TipoToken.YLogico } y:
+                {
+                    var a = HechosDe(y.Izquierda);
+                    var b = HechosDe(y.Derecha);
+                    return new Hechos(a.SiVerdadero.Union(b.SiVerdadero), a.SiFalso.Intersect(b.SiFalso));
+                }
+
+            case BinariaSintaxis { Operador.Tipo: TipoToken.OLogico } o:
+                {
+                    var a = HechosDe(o.Izquierda);
+                    var b = HechosDe(o.Derecha);
+                    return new Hechos(a.SiVerdadero.Intersect(b.SiVerdadero), a.SiFalso.Union(b.SiFalso));
+                }
+
+            case BinariaSintaxis { Operador.Tipo: TipoToken.IgualIgual or TipoToken.Distinto } comparacion:
+                {
+                    var ruta = EsNulo(comparacion.Derecha) ? RutaDeSintaxis(comparacion.Izquierda)
+                        : EsNulo(comparacion.Izquierda) ? RutaDeSintaxis(comparacion.Derecha)
+                        : null;
+                    if (ruta is null)
+                    {
+                        return Hechos.Nada;
+                    }
+
+                    ImmutableHashSet<string> conjunto = [ruta];
+                    return comparacion.Operador.Tipo == TipoToken.Distinto ? new Hechos(conjunto, []) : new Hechos([], conjunto);
+                }
+
+            default:
+                return Hechos.Nada;
+        }
+    }
+
+    private static bool EsNulo(ExpresionSintaxis expresion) =>
+        expresion is LiteralSintaxis { Literal.Tipo: TipoToken.PalabraNulo }
+        || (expresion is ParentesisSintaxis parentesis && EsNulo(parentesis.Expresion));
+
+    /// <summary>Si la expresión nombra una ruta nulable que se sabe no nula, la devuelve con su tipo sin '?'.</summary>
+    private ExpresionEnlazada AplicarNoNulo(ExpresionEnlazada expresion)
+    {
+        if (expresion.Tipo is TipoNulable nulable && Ruta(expresion) is { } ruta && _noNulos.Contains(ruta))
+        {
+            return new ConversionEnlazada(expresion, nulable.Base);
+        }
+
+        return expresion;
+    }
+
+    /// <summary>
+    /// Tras asignar a una ruta: lo que se sabía de ella y de sus campos deja de valer; si el
+    /// valor asignado no puede ser nulo y el sitio sí, el sitio queda como no nulo.
+    /// </summary>
+    private void AnotarAsignacion(string? ruta, TipoLince tipoDelSitio, ExpresionEnlazada valor)
+    {
+        if (ruta is null)
+        {
+            return;
+        }
+
+        OlvidarRuta(ruta);
+
+        // El valor llega envuelto en la conversión T → T?; lo que importa es el tipo de lo que hay dentro.
+        var tipoDelValor = valor is ConversionEnlazada { Tipo.EsNulable: true } conversion ? conversion.Expresion.Tipo : valor.Tipo;
+        if (tipoDelSitio.EsNulable && !tipoDelValor.EsNulable && !ReferenceEquals(tipoDelValor, TipoLince.Nulo) && !tipoDelValor.EsError)
+        {
+            _noNulos = _noNulos.Add(ruta);
+        }
+    }
+
+    private void OlvidarRuta(string ruta) =>
+        _noNulos = _noNulos.Except(_noNulos.Where(r => r == ruta || r.StartsWith(ruta + ".", StringComparison.Ordinal)));
+
+    /// <summary>
+    /// Antes de un ciclo: todo lo que el cuerpo asigna deja de saberse, porque en la segunda
+    /// vuelta la ruta puede traer lo que el cuerpo le puso al final de la primera.
+    /// </summary>
+    private void OlvidarLoQueAsigna(BloqueSintaxis cuerpo)
+    {
+        foreach (var raiz in RaicesAsignadas(cuerpo))
+        {
+            OlvidarRuta(raiz);
+        }
+    }
+
+    private IEnumerable<string> RaicesAsignadas(SentenciaSintaxis sentencia)
+    {
+        switch (sentencia)
+        {
+            case BloqueSintaxis bloque:
+                return bloque.Sentencias.SelectMany(RaicesAsignadas);
+            case SiSintaxis si:
+                return RaicesAsignadas(si.Entonces).Concat(si.Sino is null ? [] : RaicesAsignadas(si.Sino));
+            case MientrasSintaxis mientras:
+                return RaicesAsignadas(mientras.Cuerpo);
+            case ParaSintaxis para:
+                return RaicesAsignadas(para.Cuerpo);
+            case AsignacionSintaxis asignacion:
+                var objetivo = asignacion.Objetivo;
+                while (objetivo is MiembroSintaxis miembro)
+                {
+                    objetivo = miembro.Objeto;
+                }
+
+                return RutaDeSintaxis(objetivo) is { } raiz ? [raiz] : [];
+            default:
+                return [];
+        }
     }
 
     private TipoLince InferirTipo(ExpresionEnlazada valor, Ubicacion ubicacion, string nombre)
@@ -446,7 +629,7 @@ public sealed class Enlazador
         if (ReferenceEquals(valor.Tipo, TipoLince.Nulo))
         {
             _diagnosticos.Error(Codigos.NoSePuedeInferir, ubicacion,
-                $"'nulo' no basta para saber el tipo de '{nombre}'; escríbalo: sea {nombre}: texto = nulo;");
+                $"'nulo' no basta para saber el tipo de '{nombre}'; escríbalo: sea {nombre}: texto? = nulo;");
             return TipoLince.Error;
         }
 
@@ -509,7 +692,7 @@ public sealed class Enlazador
 
             case MiembroSintaxis miembro:
                 objeto = EnlazarExpresion(miembro.Objeto);
-                campo = BuscarCampoDe(objeto, miembro.Nombre);
+                campo = BuscarCampoDe(objeto, miembro.Nombre, miembro.Objeto);
                 if (campo is null)
                 {
                     return new ExpresionSentenciaEnlazada(new ErrorEnlazado());
@@ -555,9 +738,14 @@ public sealed class Enlazador
         valor = Convertir(valor, tipoObjetivo, asignacion.Valor.Ubicacion,
             origen => $"no se puede asignar un valor de tipo '{origen}' a '{nombreObjetivo}', que es de tipo '{tipoObjetivo}'");
 
-        return variable is not null
-            ? new AsignacionEnlazada(variable, valor)
-            : new AsignacionCampoEnlazada(objeto!, campo!, valor);
+        if (variable is not null)
+        {
+            AnotarAsignacion(RutaDeVariable(variable), tipoObjetivo, valor);
+            return new AsignacionEnlazada(variable, valor);
+        }
+
+        AnotarAsignacion(Ruta(objeto!) is { } rutaObjeto ? rutaObjeto + "." + campo!.Nombre : null, tipoObjetivo, valor);
+        return new AsignacionCampoEnlazada(objeto!, campo!, valor);
     }
 
     /// <summary>
@@ -597,15 +785,44 @@ public sealed class Enlazador
     private SiEnlazado EnlazarSi(SiSintaxis si)
     {
         var condicion = EnlazarCondicion(si.Condicion);
+        var hechos = HechosDe(si.Condicion);
+        var antes = _noNulos;
+
+        _noNulos = antes.Union(hechos.SiVerdadero);
         var entonces = EnlazarBloque(si.Entonces);
+        var despuesDeEntonces = _noNulos;
+
+        _noNulos = antes.Union(hechos.SiFalso);
         var sino = si.Sino is null ? null : EnlazarSentencia(si.Sino);
+        var despuesDeSino = _noNulos;
+
+        // Lo que sigue al 'si' solo hereda lo de las ramas por las que se puede llegar: si una
+        // rama termina (regresa), el resto del cuerpo viene de la otra.
+        var terminaEntonces = Termina(entonces);
+        var terminaSino = sino is not null && Termina(sino);
+        _noNulos = (terminaEntonces, terminaSino) switch
+        {
+            (true, true) => antes,
+            (true, false) => despuesDeSino,
+            (false, true) => despuesDeEntonces,
+            _ => despuesDeEntonces.Intersect(despuesDeSino),
+        };
+
         return new SiEnlazado(condicion, entonces, sino);
     }
 
     private MientrasEnlazado EnlazarMientras(MientrasSintaxis mientras)
     {
+        OlvidarLoQueAsigna(mientras.Cuerpo);
+        var antes = _noNulos;
         var condicion = EnlazarCondicion(mientras.Condicion);
+        var hechos = HechosDe(mientras.Condicion);
+
+        _noNulos = antes.Union(hechos.SiVerdadero);
         var cuerpo = EnlazarCuerpoDeCiclo(mientras.Cuerpo);
+
+        // Al salir, la condición fue falsa (salvo que se saliera con 'romper').
+        _noNulos = ContieneRomper(cuerpo) ? antes : antes.Union(hechos.SiFalso);
         return new MientrasEnlazado(condicion, cuerpo);
     }
 
@@ -613,6 +830,8 @@ public sealed class Enlazador
     {
         var desde = EnlazarLimiteDePara(para.Desde);
         var hasta = EnlazarLimiteDePara(para.Hasta);
+        OlvidarLoQueAsigna(para.Cuerpo);
+        var antes = _noNulos;
 
         _ambito = new Ambito(_ambito);
         var variable = new SimboloVariable(para.Variable.Texto, TipoLince.Entero, esMutable: false, ClaseDeVariable.Ciclo);
@@ -620,6 +839,7 @@ public sealed class Enlazador
         var limite = new SimboloVariable("<limite>", TipoLince.Entero, esMutable: false, ClaseDeVariable.Oculta);
         var cuerpo = EnlazarCuerpoDeCiclo(para.Cuerpo);
         _ambito = _ambito.Padre!;
+        _noNulos = antes;
 
         return new ParaEnlazado(variable, limite, desde, hasta, cuerpo);
     }
@@ -725,8 +945,7 @@ public sealed class Enlazador
         EsteSintaxis este => EnlazarEste(este),
         ParentesisSintaxis parentesis => EnlazarExpresion(parentesis.Expresion),
         UnariaSintaxis unaria => EnlazarUnaria(unaria),
-        BinariaSintaxis binaria => EnlazarBinaria(
-            EnlazarExpresion(binaria.Izquierda), binaria.Operador.Tipo, EnlazarExpresion(binaria.Derecha), binaria.Operador.Ubicacion),
+        BinariaSintaxis binaria => EnlazarBinariaSintaxis(binaria),
         LlamadaSintaxis llamada => EnlazarLlamada(llamada),
         MiembroSintaxis miembro => EnlazarMiembro(miembro),
         NuevoSintaxis nuevo => EnlazarNuevo(nuevo),
@@ -754,17 +973,41 @@ public sealed class Enlazador
         var variable = _ambito.Buscar(nombre.Identificador.Texto);
         if (variable is not null)
         {
-            return new VariableEnlazada(variable);
+            return AplicarNoNulo(new VariableEnlazada(variable));
         }
 
         // Dentro de un método, un campo del propio tipo se nombra a secas.
         if (_tipoActual?.BuscarCampo(nombre.Identificador.Texto) is { } campo)
         {
-            return new CampoEnlazado(new EsteEnlazado(_tipoActual), campo);
+            return AplicarNoNulo(new CampoEnlazado(new EsteEnlazado(_tipoActual), campo));
         }
 
         BuscarVariable(nombre.Identificador);
         return new ErrorEnlazado();
+    }
+
+    /// <summary>
+    /// Un operador binario. En <c>a &amp;&amp; b</c>, b se enlaza sabiendo que a fue verdadera;
+    /// en <c>a || b</c>, sabiendo que fue falsa: así <c>x != nulo &amp;&amp; x.campo > 0</c> compila.
+    /// </summary>
+    private ExpresionEnlazada EnlazarBinariaSintaxis(BinariaSintaxis binaria)
+    {
+        var izquierda = EnlazarExpresion(binaria.Izquierda);
+
+        var antes = _noNulos;
+        if (binaria.Operador.Tipo == TipoToken.YLogico)
+        {
+            _noNulos = antes.Union(HechosDe(binaria.Izquierda).SiVerdadero);
+        }
+        else if (binaria.Operador.Tipo == TipoToken.OLogico)
+        {
+            _noNulos = antes.Union(HechosDe(binaria.Izquierda).SiFalso);
+        }
+
+        var derecha = EnlazarExpresion(binaria.Derecha);
+        _noNulos = antes;
+
+        return EnlazarBinaria(izquierda, binaria.Operador.Tipo, derecha, binaria.Operador.Ubicacion);
     }
 
     private ExpresionEnlazada EnlazarEste(EsteSintaxis este)
@@ -843,6 +1086,21 @@ public sealed class Enlazador
             return new ErrorEnlazado();
         }
 
+        if (operador is TipoToken.IgualIgual or TipoToken.Distinto)
+        {
+            // Comparar con nulo algo que nunca es nulo es un despiste: o sobra la comparación o falta el '?'.
+            // Cuenta el tipo declarado: una ruta que el flujo ya sabe no nula sigue pudiendo compararse.
+            var (conNulo, otro) = ReferenceEquals(derecha.Tipo, TipoLince.Nulo) ? (derecha, izquierda) : (izquierda, derecha);
+            var tipoDeclarado = otro is ConversionEnlazada { Expresion.Tipo.EsNulable: true } convertido ? convertido.Expresion.Tipo : otro.Tipo;
+            if (ReferenceEquals(conNulo.Tipo, TipoLince.Nulo) && !tipoDeclarado.EsNulable && !ReferenceEquals(otro.Tipo, TipoLince.Nulo))
+            {
+                var pista = otro.Tipo.EsReferencia ? $"; si puede serlo, declárelo como '{otro.Tipo}?'" : "";
+                _diagnosticos.Error(Codigos.NuncaEsNulo, ubicacionOperador,
+                    $"esta expresión es de tipo '{otro.Tipo}' y nunca es nulo{pista}");
+                return new ErrorEnlazado();
+            }
+        }
+
         var resultado = ResolverBinaria(izquierda, operador, derecha);
         if (resultado is not null)
         {
@@ -858,7 +1116,7 @@ public sealed class Enlazador
     {
         var ti = izquierda.Tipo;
         var td = derecha.Tipo;
-        var esTexto = ReferenceEquals(ti, TipoLince.Texto) || ReferenceEquals(td, TipoLince.Texto);
+        var esTexto = ti.EsTextual || td.EsTextual;
 
         switch (operador)
         {
@@ -908,20 +1166,21 @@ public sealed class Enlazador
                         return new BinariaEnlazada(izquierda, op, derecha, TipoLince.Logico);
                     }
 
-                    var esTextoONulo = (ReferenceEquals(ti, TipoLince.Texto) || ReferenceEquals(ti, TipoLince.Nulo))
-                        && (ReferenceEquals(td, TipoLince.Texto) || ReferenceEquals(td, TipoLince.Nulo));
+                    // Textos (con o sin '?') entre sí o con nulo: por contenido.
+                    var esTextoONulo = (ti.EsTextual || ReferenceEquals(ti, TipoLince.Nulo))
+                        && (td.EsTextual || ReferenceEquals(td, TipoLince.Nulo));
                     if (esTextoONulo)
                     {
                         return new BinariaEnlazada(ATexto(izquierda), op, ATexto(derecha), TipoLince.Logico);
                     }
 
-                    // Dos referencias de la misma clase (o una y nulo) se comparan por identidad.
-                    var clase = (ti as TipoUsuario ?? td as TipoUsuario);
+                    // Dos referencias de la misma clase (con o sin '?', o una y nulo): por identidad.
+                    var clase = ti.SinNulo as TipoUsuario ?? td.SinNulo as TipoUsuario;
                     if (clase is { EsEstructura: false }
-                        && (ReferenceEquals(ti, clase) || ReferenceEquals(ti, TipoLince.Nulo))
-                        && (ReferenceEquals(td, clase) || ReferenceEquals(td, TipoLince.Nulo)))
+                        && (ReferenceEquals(ti.SinNulo, clase) || ReferenceEquals(ti, TipoLince.Nulo))
+                        && (ReferenceEquals(td.SinNulo, clase) || ReferenceEquals(td, TipoLince.Nulo)))
                     {
-                        return new BinariaEnlazada(AReferencia(izquierda, clase), op, AReferencia(derecha, clase), TipoLince.Logico);
+                        return new BinariaEnlazada(izquierda, op, derecha, TipoLince.Logico);
                     }
 
                     return null;
@@ -945,12 +1204,9 @@ public sealed class Enlazador
     private static ExpresionEnlazada ANumerico(ExpresionEnlazada expresion, TipoLince tipo) =>
         ReferenceEquals(expresion.Tipo, tipo) ? expresion : new ConversionEnlazada(expresion, tipo);
 
-    /// <summary>Envuelve en una conversión a texto lo que no sea ya texto. Solo para tipos escribibles.</summary>
+    /// <summary>Envuelve en una conversión a texto lo que no sea ya texto (o texto?). Solo para tipos escribibles.</summary>
     private static ExpresionEnlazada ATexto(ExpresionEnlazada expresion) =>
-        ReferenceEquals(expresion.Tipo, TipoLince.Texto) ? expresion : new ConversionEnlazada(expresion, TipoLince.Texto);
-
-    private static ExpresionEnlazada AReferencia(ExpresionEnlazada expresion, TipoLince tipo) =>
-        ReferenceEquals(expresion.Tipo, tipo) ? expresion : new ConversionEnlazada(expresion, tipo);
+        expresion.Tipo.EsTextual ? expresion : new ConversionEnlazada(expresion, TipoLince.Texto);
 
     private ExpresionEnlazada EnlazarLlamada(LlamadaSintaxis llamada)
     {
@@ -1022,6 +1278,12 @@ public sealed class Enlazador
 
         if (objeto.Tipo.EsError || miembro.Nombre.EsFaltante)
         {
+            return new ErrorEnlazado();
+        }
+
+        if (objeto.Tipo.EsNulable)
+        {
+            InformarMiembroDeNulable(objeto, miembro.Objeto);
             return new ErrorEnlazado();
         }
 
@@ -1150,15 +1412,28 @@ public sealed class Enlazador
     private ExpresionEnlazada EnlazarMiembro(MiembroSintaxis miembro)
     {
         var objeto = EnlazarExpresion(miembro.Objeto);
-        var campo = BuscarCampoDe(objeto, miembro.Nombre);
-        return campo is null ? new ErrorEnlazado() : new CampoEnlazado(objeto, campo);
+        var campo = BuscarCampoDe(objeto, miembro.Nombre, miembro.Objeto);
+        return campo is null ? new ErrorEnlazado() : AplicarNoNulo(new CampoEnlazado(objeto, campo));
+    }
+
+    private void InformarMiembroDeNulable(ExpresionEnlazada objeto, ExpresionSintaxis sintaxis)
+    {
+        var que = sintaxis.Ubicacion.Texto;
+        _diagnosticos.Error(Codigos.MiembroDeNulable, sintaxis.Ubicacion,
+            $"'{que}' es de tipo '{objeto.Tipo}' y puede ser nulo; compruébelo antes de usar sus miembros: si {que} != nulo {{ ... }}");
     }
 
     /// <summary>El campo <c>nombre</c> del tipo del objeto, con sus comprobaciones; null (ya informado) si no procede.</summary>
-    private SimboloCampo? BuscarCampoDe(ExpresionEnlazada objeto, Token nombre)
+    private SimboloCampo? BuscarCampoDe(ExpresionEnlazada objeto, Token nombre, ExpresionSintaxis sintaxisDelObjeto)
     {
         if (objeto.Tipo.EsError || nombre.EsFaltante)
         {
+            return null;
+        }
+
+        if (objeto.Tipo.EsNulable)
+        {
+            InformarMiembroDeNulable(objeto, sintaxisDelObjeto);
             return null;
         }
 
@@ -1243,13 +1518,29 @@ public sealed class Enlazador
 
         if (ReferenceEquals(origen, TipoLince.Nulo))
         {
-            if (destino.EsReferencia)
+            if (destino.EsNulable)
             {
                 return new ConversionEnlazada(expresion, destino);
             }
 
+            var pista = destino.EsReferencia ? $"; declárelo como '{destino}?' si puede ser nulo" : "";
             _diagnosticos.Error(Codigos.NuloEnTipoNoNulable, ubicacion,
-                $"'nulo' no es un valor válido para el tipo '{destino}'; solo 'texto' y las clases admiten nulo");
+                $"'nulo' no es un valor válido para el tipo '{destino}'{pista}");
+            return new ErrorEnlazado();
+        }
+
+        // T → T?: siempre se puede.
+        if (destino is TipoNulable nulable && ReferenceEquals(origen, nulable.Base))
+        {
+            return new ConversionEnlazada(expresion, destino);
+        }
+
+        // T? → T: solo donde el flujo ya lo convirtió; aquí es un error con la pista de cómo comprobarlo.
+        if (origen is TipoNulable origenNulable && ReferenceEquals(origenNulable.Base, destino))
+        {
+            var que = Ruta(expresion) is not null ? "este valor" : "esta expresión";
+            _diagnosticos.Error(Codigos.PuedeSerNulo, ubicacion,
+                $"{que} es de tipo '{origen}' y puede ser nulo, y aquí se necesita '{destino}'; compruébelo antes con si ... != nulo");
             return new ErrorEnlazado();
         }
 

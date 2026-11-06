@@ -217,8 +217,8 @@ public static class EmisorIl
 
         public Dictionary<TipoUsuario, ConstructorBuilder> Constructores { get; } = new();
 
-        /// <summary>El tipo de .NET de un tipo de Lince: fijo para los básicos, el TypeBuilder para los de usuario.</summary>
-        public Type Clr(TipoLince tipo) => tipo is TipoUsuario usuario ? Tipos[usuario] : tipo.TipoClr;
+        /// <summary>El tipo de .NET de un tipo de Lince: fijo para los básicos, el TypeBuilder para los de usuario; un T? es el mismo que T.</summary>
+        public Type Clr(TipoLince tipo) => tipo.SinNulo is TipoUsuario usuario ? Tipos[usuario] : tipo.SinNulo.TipoClr;
     }
 
     /// <summary>Miembros de .NET que el código generado llama. Se resuelven una vez.</summary>
@@ -680,7 +680,7 @@ public static class EmisorIl
             EmitirExpresion(binaria.Izquierda);
             EmitirExpresion(binaria.Derecha);
 
-            var esTexto = ReferenceEquals(binaria.Izquierda.Tipo, TipoLince.Texto);
+            var esTexto = binaria.Izquierda.Tipo.EsTextual;
             var esDecimal = ReferenceEquals(binaria.Izquierda.Tipo, TipoLince.Decimal);
 
             switch (binaria.Operador)
@@ -784,11 +784,17 @@ public static class EmisorIl
 
             if (ReferenceEquals(origen, TipoLince.Nulo) && destino.EsReferencia)
             {
-                // nulo → texto o clase: la referencia nula ya está en la pila.
+                // nulo → texto? o clase?: la referencia nula ya está en la pila.
                 return;
             }
 
-            if (ReferenceEquals(destino, TipoLince.Texto))
+            if (ReferenceEquals(origen.SinNulo, destino.SinNulo))
+            {
+                // T → T? y T? → T (donde el flujo lo permitió): en .NET son el mismo tipo.
+                return;
+            }
+
+            if (destino.EsTextual)
             {
                 if (ReferenceEquals(origen, TipoLince.Entero))
                 {

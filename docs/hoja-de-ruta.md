@@ -17,7 +17,7 @@ locales con `sea`/`var` e inferencia, recursión, `imprimir`, concatenación de 
 Compila a un ensamblado .NET real con `PersistedAssemblyBuilder`. Diagnósticos con posición y
 recuperación de errores. CLI `lince compilar` y `lince ejecutar`. Suite de pruebas por fase.
 
-## Fase 2: objetos (en curso)
+## Fase 2: objetos (hecha, 2026-11-06)
 
 Sin esto no se puede ni crear una app web ni un DataFrame.
 
@@ -26,8 +26,10 @@ Sin esto no se puede ni crear una app web ni un DataFrame.
   (`funcion nuevo(...)`) o implícito por los campos sin valor inicial. Se emiten como clases
   de .NET.
 - **Estructuras** (`estructura Punto { ... }`): lo mismo, por valor. Se emiten como `struct`.
-- **Tipos nulables** (`Cuenta?`) con análisis de flujo (`si x != nulo { x.metodo(); }`), para
-  que `nulo` deje de ser un caso especial de `texto`.
+- **Tipos nulables** (`texto?`, `Cuenta?`) con análisis de flujo: `nulo` solo cabe en un tipo
+  con `?`, y un `T?` se usa como `T` tras `si x != nulo`, `si x == nulo { regresar; }`,
+  `x != nulo && ...` o `mientras x != nulo`. Queda para después: `?` sobre tipos por valor
+  (`entero?`, sobre `Nullable<T>`).
 - Herencia e interfaces se evalúan en la fase 6, cuando la interoperabilidad las exija.
 
 ## Fase 3: colecciones y funciones como valores

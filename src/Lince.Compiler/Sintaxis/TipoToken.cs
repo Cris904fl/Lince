@@ -52,6 +52,7 @@ public enum TipoToken
     DosPuntos,
     Punto,
     PuntoPunto,
+    Interrogacion,
 
     // Operadores aritméticos
     Mas,

@@ -60,7 +60,7 @@ public class PruebasDeExtremoAExtremo : IDisposable
                 imprimir(falso);
                 imprimir("año y ñandú");
                 imprimir();
-                sea t: texto = nulo;
+                sea t: texto? = nulo;
                 imprimir(t);
             }
             """);

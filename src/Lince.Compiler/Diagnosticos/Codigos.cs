@@ -60,6 +60,10 @@ public static class Codigos
     public const string ConstructorMalFormado = "LN3038";
     public const string CampoDeValorInmutable = "LN3039";
     public const string NuevoDeTipoBasico = "LN3040";
+    public const string PuedeSerNulo = "LN3041";
+    public const string MiembroDeNulable = "LN3042";
+    public const string NuncaEsNulo = "LN3043";
+    public const string NulableDeValor = "LN3044";
 
     // Emisión y herramienta
     public const string ErrorDeEmision = "LN4001";

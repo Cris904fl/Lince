@@ -1,0 +1,80 @@
+// Tipos nulables: Nodo? puede ser nulo y Nodo nunca. El compilador sabe que tras
+// "si x != nulo" (o "mientras x != nulo") x es un Nodo y deja usar sus miembros.
+
+clase Nodo {
+    valor: entero;
+    siguiente: Nodo?;
+
+    funcion nuevo(valor: entero) {
+        este.valor = valor;
+        siguiente = nulo;
+    }
+}
+
+clase Lista {
+    privado cabeza: Nodo?;
+    cantidad: entero = 0;
+
+    funcion nuevo() {
+        cabeza = nulo;
+    }
+
+    funcion agregar(valor: entero) {
+        sea nodo = nuevo Nodo(valor);
+        nodo.siguiente = cabeza;
+        cabeza = nodo;
+        cantidad += 1;
+    }
+
+    funcion buscar(valor: entero): Nodo? {
+        var actual = cabeza;
+        mientras actual != nulo {
+            si actual.valor == valor {
+                regresar actual;
+            }
+            actual = actual.siguiente;
+        }
+        regresar nulo;
+    }
+
+    funcion suma(): entero {
+        var total = 0;
+        var actual = cabeza;
+        mientras actual != nulo {
+            total += actual.valor;
+            actual = actual.siguiente;
+        }
+        regresar total;
+    }
+
+    funcion describir(): texto {
+        si cabeza == nulo {
+            regresar "(vacía)";
+        }
+        var cadena = "" + cabeza.valor;
+        var actual = cabeza.siguiente;
+        mientras actual != nulo {
+            cadena = cadena + " -> " + actual.valor;
+            actual = actual.siguiente;
+        }
+        regresar cadena;
+    }
+}
+
+funcion principal() {
+    sea coleccion = nuevo Lista();
+    imprimir(coleccion.describir());
+    para i en 1..6 {
+        coleccion.agregar(i * 10);
+    }
+    imprimir(coleccion.describir());
+    imprimir("suma: " + coleccion.suma() + ", cantidad: " + coleccion.cantidad);
+
+    sea encontrado = coleccion.buscar(30);
+    si encontrado != nulo {
+        imprimir("encontrado " + encontrado.valor);
+    }
+    si coleccion.buscar(99) == nulo {
+        imprimir("99 no está");
+    }
+}

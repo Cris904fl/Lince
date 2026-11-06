@@ -301,7 +301,7 @@ public class PruebasDeEnlace
     [Fact]
     public void Nulo_en_texto_es_valido_y_se_puede_comparar()
     {
-        var (_, diagnosticos) = Enlazar("funcion principal() { sea a: texto = nulo; si a == nulo { imprimir(\"vacío\"); } }");
+        var (_, diagnosticos) = Enlazar("funcion principal() { sea a: texto? = nulo; si a == nulo { imprimir(\"vacío\"); } }");
 
         Assert.Empty(diagnosticos);
     }
@@ -318,7 +318,7 @@ public class PruebasDeEnlace
         var error = UnicoError("sea a = nulo;");
 
         Assert.Equal(Codigos.NoSePuedeInferir, error.Codigo);
-        Assert.Contains("sea a: texto = nulo;", error.Mensaje);
+        Assert.Contains("sea a: texto? = nulo;", error.Mensaje);
     }
 
     [Theory]

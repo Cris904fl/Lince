@@ -41,14 +41,40 @@ public class TipoLince
 
     public bool EsNumerico => ReferenceEquals(this, Entero) || ReferenceEquals(this, Decimal);
 
-    /// <summary>Tipos con los que se puede concatenar un texto o imprimir.</summary>
+    /// <summary>Tipos con los que se puede concatenar un texto o imprimir. Un <c>texto?</c> también: nulo se escribe vacío.</summary>
     public bool SePuedeEscribir => ReferenceEquals(this, Entero) || ReferenceEquals(this, Decimal)
-        || ReferenceEquals(this, Texto) || ReferenceEquals(this, Logico) || ReferenceEquals(this, Nulo);
+        || ReferenceEquals(this, Texto) || ReferenceEquals(this, Logico) || ReferenceEquals(this, Nulo)
+        || this is TipoNulable { Base: var b } && ReferenceEquals(b, Texto);
 
-    /// <summary>Tipos por referencia: admiten <c>nulo</c> y se comparan por identidad.</summary>
-    public bool EsReferencia => ReferenceEquals(this, Texto) || this is TipoUsuario { EsEstructura: false };
+    /// <summary>Tipos por referencia: se pueden hacer nulables y se comparan por identidad.</summary>
+    public bool EsReferencia => ReferenceEquals(this, Texto) || this is TipoUsuario { EsEstructura: false } || this is TipoNulable;
 
     public bool EsEstructura => this is TipoUsuario { EsEstructura: true };
+
+    public bool EsNulable => this is TipoNulable;
+
+    /// <summary>El tipo sin el <c>?</c>: <c>texto</c> para <c>texto?</c>; el mismo si no es nulable.</summary>
+    public TipoLince SinNulo => this is TipoNulable nulable ? nulable.Base : this;
+
+    /// <summary>Verdadero si es <c>texto</c> o <c>texto?</c>.</summary>
+    public bool EsTextual => ReferenceEquals(SinNulo, Texto);
+
+    private static readonly Dictionary<TipoLince, TipoNulable> _nulables = new();
+
+    /// <summary>El tipo <c>T?</c> de un tipo por referencia, único por tipo base para poder comparar por referencia.</summary>
+    public static TipoNulable Nulable(TipoLince baseTipo)
+    {
+        lock (_nulables)
+        {
+            if (!_nulables.TryGetValue(baseTipo, out var nulable))
+            {
+                nulable = new TipoNulable(baseTipo);
+                _nulables[baseTipo] = nulable;
+            }
+
+            return nulable;
+        }
+    }
 
     public static TipoLince? DesdePalabra(TipoToken tipo) => tipo switch
     {
@@ -61,6 +87,21 @@ public class TipoLince
     };
 
     public override string ToString() => Nombre;
+}
+
+/// <summary>
+/// <c>T?</c>: un tipo por referencia que además puede ser <c>nulo</c>. En .NET es el mismo
+/// tipo que su base; la diferencia la vigila el enlazador con el análisis de flujo.
+/// </summary>
+public sealed class TipoNulable : TipoLince
+{
+    internal TipoNulable(TipoLince baseTipo)
+        : base(baseTipo.Nombre + "?", null)
+    {
+        Base = baseTipo;
+    }
+
+    public TipoLince Base { get; }
 }
 
 /// <summary>

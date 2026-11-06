@@ -87,10 +87,15 @@ public sealed record ParametroSintaxis(Token Nombre, Token DosPuntos, TipoSintax
     public override Ubicacion Ubicacion => Ubicacion.Entre(Nombre.Ubicacion, Tipo.Ubicacion);
 }
 
-/// <summary>Un nombre de tipo: una palabra clave (entero, decimal, texto, logico, nada) o el identificador de un tipo declarado.</summary>
-public sealed record TipoSintaxis(Token Palabra) : NodoSintaxis
+/// <summary>
+/// Un nombre de tipo: una palabra clave (entero, decimal, texto, logico, nada) o el
+/// identificador de un tipo declarado, con un <c>?</c> opcional que lo hace nulable.
+/// </summary>
+public sealed record TipoSintaxis(Token Palabra, Token? Interrogacion = null) : NodoSintaxis
 {
-    public override Ubicacion Ubicacion => Palabra.Ubicacion;
+    public bool EsNulable => Interrogacion is not null;
+
+    public override Ubicacion Ubicacion => Interrogacion is null ? Palabra.Ubicacion : Ubicacion.Entre(Palabra.Ubicacion, Interrogacion.Ubicacion);
 }
 
 // ----- Sentencias -----

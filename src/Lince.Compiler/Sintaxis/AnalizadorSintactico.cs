@@ -195,7 +195,9 @@ public sealed class AnalizadorSintactico
     {
         if (Palabras.EsTipo(Actual.Tipo) || Actual.Tipo == TipoToken.Identificador)
         {
-            return new TipoSintaxis(Avanzar());
+            var palabra = Avanzar();
+            var interrogacion = Actual.Tipo == TipoToken.Interrogacion ? Avanzar() : null;
+            return new TipoSintaxis(palabra, interrogacion);
         }
 
         Informar(Codigos.SeEsperabaTipo,
