@@ -44,18 +44,27 @@ public sealed class SimboloVariable : Simbolo
 
     public ClaseDeVariable Clase { get; }
 
-    /// <summary>Posición del parámetro en la firma, o -1 si no es parámetro.</summary>
+    /// <summary>Posición del parámetro en la firma (sin contar <c>este</c>), o -1 si no es parámetro.</summary>
     public int IndiceDeParametro { get; }
 }
 
+/// <summary>Una función libre, un método o un constructor (<see cref="EsConstructor"/>).</summary>
 public sealed class SimboloFuncion : Simbolo
 {
-    public SimboloFuncion(string nombre, ImmutableArray<SimboloVariable> parametros, TipoLince tipoRetorno, FuncionSintaxis? declaracion)
+    public SimboloFuncion(
+        string nombre,
+        ImmutableArray<SimboloVariable> parametros,
+        TipoLince tipoRetorno,
+        FuncionSintaxis? declaracion,
+        TipoUsuario? tipoContenedor = null,
+        bool esPrivada = false)
         : base(nombre)
     {
         Parametros = parametros;
         TipoRetorno = tipoRetorno;
         Declaracion = declaracion;
+        TipoContenedor = tipoContenedor;
+        EsPrivada = esPrivada;
     }
 
     public ImmutableArray<SimboloVariable> Parametros { get; }
@@ -63,4 +72,33 @@ public sealed class SimboloFuncion : Simbolo
     public TipoLince TipoRetorno { get; }
 
     public FuncionSintaxis? Declaracion { get; }
+
+    /// <summary>La clase o estructura a la que pertenece; null en una función libre.</summary>
+    public TipoUsuario? TipoContenedor { get; }
+
+    public bool EsMetodo => TipoContenedor is not null;
+
+    public bool EsConstructor => EsMetodo && Nombre == "nuevo";
+
+    public bool EsPrivada { get; }
+}
+
+public sealed class SimboloCampo : Simbolo
+{
+    public SimboloCampo(string nombre, TipoLince tipo, TipoUsuario tipoContenedor, bool esPrivado, CampoSintaxis declaracion)
+        : base(nombre)
+    {
+        Tipo = tipo;
+        TipoContenedor = tipoContenedor;
+        EsPrivado = esPrivado;
+        Declaracion = declaracion;
+    }
+
+    public TipoLince Tipo { get; }
+
+    public TipoUsuario TipoContenedor { get; }
+
+    public bool EsPrivado { get; }
+
+    public CampoSintaxis Declaracion { get; }
 }

@@ -20,6 +20,8 @@ public static class Codigos
     public const string SeEsperabaExpresion = "LN2003";
     public const string PalabraReservada = "LN2004";
     public const string SeEsperabaTipo = "LN2005";
+    public const string ObjetivoDeAsignacionInvalido = "LN2006";
+    public const string SeEsperabaMiembro = "LN2007";
 
     // Enlace y tipos
     public const string FuncionDuplicada = "LN3001";
@@ -48,6 +50,16 @@ public static class Codigos
     public const string LimiteDeParaNoEntero = "LN3028";
     public const string NoSePuedeInferir = "LN3029";
     public const string ExpresionSinValor = "LN3030";
+    public const string TipoNoExiste = "LN3031";
+    public const string TipoDuplicado = "LN3032";
+    public const string MiembroDuplicado = "LN3033";
+    public const string MiembroNoExiste = "LN3034";
+    public const string MiembroPrivado = "LN3035";
+    public const string EsteFueraDeMetodo = "LN3036";
+    public const string ModificadorFueraDeTipo = "LN3037";
+    public const string ConstructorMalFormado = "LN3038";
+    public const string CampoDeValorInmutable = "LN3039";
+    public const string NuevoDeTipoBasico = "LN3040";
 
     // Emisión y herramienta
     public const string ErrorDeEmision = "LN4001";

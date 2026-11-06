@@ -28,8 +28,10 @@ fib(1) = 1
 fib(9) = 34
 ```
 
-La referencia completa del lenguaje está en [docs/especificacion.md](docs/especificacion.md) y
-lo que viene, en [docs/hoja-de-ruta.md](docs/hoja-de-ruta.md).
+Hay clases y estructuras con campos, métodos, constructor, `este` y `privado`
+([ejemplos/cuentas.ln](ejemplos/cuentas.ln)). La referencia completa del lenguaje está en
+[docs/especificacion.md](docs/especificacion.md) y lo que viene, en
+[docs/hoja-de-ruta.md](docs/hoja-de-ruta.md).
 
 ## Requisitos
 

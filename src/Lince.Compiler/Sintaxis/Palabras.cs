@@ -30,6 +30,12 @@ public static class Palabras
         ["texto"] = TipoToken.PalabraTexto,
         ["logico"] = TipoToken.PalabraLogico,
         ["nada"] = TipoToken.PalabraNada,
+        ["clase"] = TipoToken.PalabraClase,
+        ["estructura"] = TipoToken.PalabraEstructura,
+        ["nuevo"] = TipoToken.PalabraNuevo,
+        ["este"] = TipoToken.PalabraEste,
+        ["privado"] = TipoToken.PalabraPrivado,
+        ["publico"] = TipoToken.PalabraPublico,
     }.ToFrozenDictionary();
 
     /// <summary>
@@ -38,8 +44,8 @@ public static class Palabras
     /// </summary>
     private static readonly FrozenSet<string> _reservadas = new[]
     {
-        "clase", "estructura", "nuevo", "este", "publico", "privado", "modulo", "importar",
-        "segun", "caso", "intentar", "capturar", "lanzar", "lista", "mapa", "interfaz", "enumeracion",
+        "modulo", "importar", "segun", "caso", "intentar", "capturar", "lanzar", "lista", "mapa",
+        "interfaz", "enumeracion", "hereda", "asincrono", "esperar",
     }.ToFrozenSet();
 
     public static TipoToken TipoDePalabra(string texto)
@@ -65,6 +71,7 @@ public static class Palabras
         TipoToken.Coma => ",",
         TipoToken.PuntoYComa => ";",
         TipoToken.DosPuntos => ":",
+        TipoToken.Punto => ".",
         TipoToken.PuntoPunto => "..",
         TipoToken.Mas => "+",
         TipoToken.Menos => "-",

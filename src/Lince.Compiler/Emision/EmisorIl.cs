@@ -11,9 +11,10 @@ namespace Lince.Compiler.Emision;
 
 /// <summary>
 /// Convierte el programa enlazado en un ensamblado .NET ejecutable con
-/// <see cref="PersistedAssemblyBuilder"/>. Todas las funciones del archivo son métodos
-/// estáticos de una clase <c>Programa</c>; el punto de entrada es un <c>Main</c> generado que
-/// llama a <c>principal</c> y convierte su resultado en código de salida.
+/// <see cref="PersistedAssemblyBuilder"/>. Las funciones libres son métodos estáticos de una
+/// clase <c>Programa</c>; cada clase o estructura de Lince es un tipo de .NET con el mismo
+/// nombre. El punto de entrada es un <c>Main</c> generado que llama a <c>principal</c> y
+/// convierte su resultado en código de salida.
 /// </summary>
 public static class EmisorIl
 {
@@ -29,34 +30,74 @@ public static class EmisorIl
 
         var ensamblado = new PersistedAssemblyBuilder(new AssemblyName(nombreEnsamblado), typeof(object).Assembly);
         var modulo = ensamblado.DefineDynamicModule(nombreEnsamblado);
-        var clase = modulo.DefineType(NombreDeClase, TypeAttributes.Public | TypeAttributes.Abstract | TypeAttributes.Sealed | TypeAttributes.Class);
+        var tabla = new Tabla();
 
-        // Primero las firmas, para que cualquier cuerpo pueda llamar a cualquier función.
-        var metodos = new Dictionary<SimboloFuncion, MethodBuilder>();
-        foreach (var funcion in programa.Funciones)
+        // 1. Los tipos, para que cualquier firma pueda nombrarlos.
+        foreach (var tipo in programa.Tipos)
         {
-            var simbolo = funcion.Simbolo;
-            var metodo = clase.DefineMethod(
-                simbolo.Nombre,
-                MethodAttributes.Public | MethodAttributes.Static,
-                simbolo.TipoRetorno.TipoClr,
-                simbolo.Parametros.Select(p => p.Tipo.TipoClr).ToArray());
+            var atributos = TypeAttributes.Public | TypeAttributes.Class;
+            var constructor = tipo.Tipo.EsEstructura
+                ? modulo.DefineType(tipo.Tipo.Nombre, atributos | TypeAttributes.Sealed | TypeAttributes.SequentialLayout, typeof(ValueType))
+                : modulo.DefineType(tipo.Tipo.Nombre, atributos);
+            tabla.Tipos[tipo.Tipo] = constructor;
+        }
 
-            for (var i = 0; i < simbolo.Parametros.Length; i++)
+        // 2. Campos, firmas de métodos y constructores.
+        foreach (var tipo in programa.Tipos)
+        {
+            var constructor = tabla.Tipos[tipo.Tipo];
+            foreach (var campo in tipo.Tipo.Campos)
             {
-                metodo.DefineParameter(i + 1, ParameterAttributes.None, simbolo.Parametros[i].Nombre);
+                var atributos = campo.EsPrivado ? FieldAttributes.Private : FieldAttributes.Public;
+                tabla.Campos[campo] = constructor.DefineField(campo.Nombre, tabla.Clr(campo.Tipo), atributos);
             }
 
-            metodos[simbolo] = metodo;
+            foreach (var metodo in tipo.Metodos)
+            {
+                DefinirMetodo(constructor, metodo.Simbolo, tabla);
+            }
+
+            var parametros = tipo.Tipo.ParametrosDeNuevo.Select(p => tabla.Clr(p.Tipo)).ToArray();
+            var ctor = constructor.DefineConstructor(MethodAttributes.Public | MethodAttributes.HideBySig, CallingConventions.Standard, parametros);
+            for (var i = 0; i < tipo.Tipo.ParametrosDeNuevo.Length; i++)
+            {
+                ctor.DefineParameter(i + 1, ParameterAttributes.None, tipo.Tipo.ParametrosDeNuevo[i].Nombre);
+            }
+
+            tabla.Constructores[tipo.Tipo] = ctor;
+        }
+
+        var programaClase = modulo.DefineType(NombreDeClase, TypeAttributes.Public | TypeAttributes.Abstract | TypeAttributes.Sealed | TypeAttributes.Class);
+        foreach (var funcion in programa.Funciones)
+        {
+            DefinirMetodo(programaClase, funcion.Simbolo, tabla);
+        }
+
+        // 3. Cuerpos.
+        foreach (var tipo in programa.Tipos)
+        {
+            EmitirConstructor(tipo, tabla);
+            foreach (var metodo in tipo.Metodos)
+            {
+                new EmisorDeFuncion(tabla.Metodos[metodo.Simbolo].GetILGenerator(), metodo.Simbolo, tabla).EmitirCuerpo(metodo.Cuerpo);
+            }
         }
 
         foreach (var funcion in programa.Funciones)
         {
-            new EmisorDeFuncion(metodos[funcion.Simbolo].GetILGenerator(), funcion, metodos).Emitir();
+            new EmisorDeFuncion(tabla.Metodos[funcion.Simbolo].GetILGenerator(), funcion.Simbolo, tabla).EmitirCuerpo(funcion.Cuerpo);
         }
 
-        var entrada = EmitirEntrada(clase, metodos[programa.Principal], programa.Principal);
-        clase.CreateType();
+        var entrada = EmitirEntrada(programaClase, tabla.Metodos[programa.Principal], programa.Principal);
+
+        // Las estructuras antes que las clases: una clase puede tener un campo de tipo estructura
+        // y el constructor de tipos necesita conocer su tamaño.
+        foreach (var tipo in programa.Tipos.OrderByDescending(t => t.Tipo.EsEstructura))
+        {
+            tabla.Tipos[tipo.Tipo].CreateType();
+        }
+
+        programaClase.CreateType();
 
         var metadatos = ensamblado.GenerateMetadata(out var il, out var datosDeCampos);
         var pe = new ManagedPEBuilder(
@@ -69,6 +110,77 @@ public static class EmisorIl
         var blob = new BlobBuilder();
         pe.Serialize(blob);
         return blob.ToArray();
+    }
+
+    private static void DefinirMetodo(TypeBuilder clase, SimboloFuncion simbolo, Tabla tabla)
+    {
+        var atributos = (simbolo.EsPrivada ? MethodAttributes.Private : MethodAttributes.Public) | MethodAttributes.HideBySig;
+        if (!simbolo.EsMetodo)
+        {
+            atributos |= MethodAttributes.Static;
+        }
+
+        var metodo = clase.DefineMethod(
+            simbolo.Nombre,
+            atributos,
+            tabla.Clr(simbolo.TipoRetorno),
+            simbolo.Parametros.Select(p => tabla.Clr(p.Tipo)).ToArray());
+
+        for (var i = 0; i < simbolo.Parametros.Length; i++)
+        {
+            metodo.DefineParameter(i + 1, ParameterAttributes.None, simbolo.Parametros[i].Nombre);
+        }
+
+        tabla.Metodos[simbolo] = metodo;
+    }
+
+    /// <summary>
+    /// El constructor: inicializa el objeto (llamando al de <c>object</c> o poniendo a cero la
+    /// estructura), asigna los valores iniciales de los campos y después corre el cuerpo de
+    /// <c>funcion nuevo</c> o, si no lo hay, copia cada argumento en su campo.
+    /// </summary>
+    private static void EmitirConstructor(TipoEnlazado tipo, Tabla tabla)
+    {
+        var ctor = tabla.Constructores[tipo.Tipo];
+        var il = ctor.GetILGenerator();
+
+        if (tipo.Tipo.EsEstructura)
+        {
+            il.Emit(OpCodes.Ldarg_0);
+            il.Emit(OpCodes.Initobj, tabla.Tipos[tipo.Tipo]);
+        }
+        else
+        {
+            il.Emit(OpCodes.Ldarg_0);
+            il.Emit(OpCodes.Call, Clr.ConstructorDeObjeto);
+        }
+
+        var simbolo = tipo.Constructor?.Simbolo
+            ?? new SimboloFuncion(Enlazador.NombreDeConstructor, tipo.Tipo.ParametrosDeNuevo, TipoLince.Nada, null, tipo.Tipo);
+        var emisor = new EmisorDeFuncion(il, simbolo, tabla);
+
+        foreach (var inicial in tipo.Iniciales)
+        {
+            il.Emit(OpCodes.Ldarg_0);
+            emisor.EmitirExpresion(inicial.Valor);
+            il.Emit(OpCodes.Stfld, tabla.Campos[inicial.Campo]);
+        }
+
+        if (tipo.Constructor is not null)
+        {
+            emisor.EmitirCuerpo(tipo.Constructor.Cuerpo);
+            return;
+        }
+
+        var camposSinInicial = tipo.Tipo.Campos.Where(c => c.Declaracion.Inicial is null).ToList();
+        for (var i = 0; i < camposSinInicial.Count; i++)
+        {
+            il.Emit(OpCodes.Ldarg_0);
+            EmisorDeFuncion.EmitirCargaDeArgumento(il, i + 1);
+            il.Emit(OpCodes.Stfld, tabla.Campos[camposSinInicial[i]]);
+        }
+
+        il.Emit(OpCodes.Ret);
     }
 
     private static MethodBuilder EmitirEntrada(TypeBuilder clase, MethodBuilder principal, SimboloFuncion simboloPrincipal)
@@ -94,6 +206,21 @@ public static class EmisorIl
         return entrada;
     }
 
+    /// <summary>Lo que el emisor ya definió, para que los cuerpos puedan referirse a ello.</summary>
+    private sealed class Tabla
+    {
+        public Dictionary<TipoUsuario, TypeBuilder> Tipos { get; } = new();
+
+        public Dictionary<SimboloCampo, FieldBuilder> Campos { get; } = new();
+
+        public Dictionary<SimboloFuncion, MethodBuilder> Metodos { get; } = new();
+
+        public Dictionary<TipoUsuario, ConstructorBuilder> Constructores { get; } = new();
+
+        /// <summary>El tipo de .NET de un tipo de Lince: fijo para los básicos, el TypeBuilder para los de usuario.</summary>
+        public Type Clr(TipoLince tipo) => tipo is TipoUsuario usuario ? Tipos[usuario] : tipo.TipoClr;
+    }
+
     /// <summary>Miembros de .NET que el código generado llama. Se resuelven una vez.</summary>
     private static class Clr
     {
@@ -106,36 +233,41 @@ public static class EmisorIl
         public static readonly MethodInfo DecimalATexto = Metodo(typeof(double), nameof(double.ToString), typeof(IFormatProvider));
         public static readonly MethodInfo ObtenerUtf8 = typeof(Encoding).GetProperty(nameof(Encoding.UTF8))!.GetMethod!;
         public static readonly MethodInfo FijarCodificacionDeSalida = typeof(Console).GetProperty(nameof(Console.OutputEncoding))!.SetMethod!;
+        public static readonly ConstructorInfo ConstructorDeObjeto = typeof(object).GetConstructor(Type.EmptyTypes)!;
 
         private static MethodInfo Metodo(Type tipo, string nombre, params Type[] parametros) =>
             tipo.GetMethod(nombre, parametros) ?? throw new MissingMethodException(tipo.FullName, nombre);
     }
 
-    /// <summary>Emite el cuerpo de una función. Una instancia por función: guarda sus locales y sus ciclos.</summary>
+    /// <summary>Emite el cuerpo de una función, método o constructor. Una instancia por cuerpo: guarda sus locales y sus ciclos.</summary>
     private sealed class EmisorDeFuncion
     {
         private readonly ILGenerator _il;
-        private readonly FuncionEnlazada _funcion;
-        private readonly Dictionary<SimboloFuncion, MethodBuilder> _metodos;
+        private readonly SimboloFuncion _funcion;
+        private readonly Tabla _tabla;
         private readonly Dictionary<SimboloVariable, LocalBuilder> _locales = new();
         private readonly Stack<(Label Romper, Label Continuar)> _ciclos = new();
         private LocalBuilder? _temporalEntero;
         private LocalBuilder? _temporalDecimal;
 
-        public EmisorDeFuncion(ILGenerator il, FuncionEnlazada funcion, Dictionary<SimboloFuncion, MethodBuilder> metodos)
+        /// <summary>En un método de instancia el argumento 0 es <c>este</c>; los parámetros empiezan en 1.</summary>
+        private readonly int _desplazamientoDeArgumentos;
+
+        public EmisorDeFuncion(ILGenerator il, SimboloFuncion funcion, Tabla tabla)
         {
             _il = il;
             _funcion = funcion;
-            _metodos = metodos;
+            _tabla = tabla;
+            _desplazamientoDeArgumentos = funcion.EsMetodo ? 1 : 0;
         }
 
-        public void Emitir()
+        public void EmitirCuerpo(BloqueEnlazado cuerpo)
         {
-            EmitirBloque(_funcion.Cuerpo);
+            EmitirBloque(cuerpo);
 
             // El enlazador ya garantizó que las funciones con valor regresan por todos los
             // caminos; este cierre es inalcanzable pero mantiene el IL bien formado.
-            var tipoRetorno = _funcion.Simbolo.TipoRetorno;
+            var tipoRetorno = _funcion.TipoRetorno;
             if (!ReferenceEquals(tipoRetorno, TipoLince.Nada))
             {
                 EmitirValorPorDefecto(tipoRetorno);
@@ -157,6 +289,13 @@ public static class EmisorIl
             else if (ReferenceEquals(tipo, TipoLince.Logico))
             {
                 _il.Emit(OpCodes.Ldc_I4_0);
+            }
+            else if (tipo.EsEstructura)
+            {
+                var temporal = _il.DeclareLocal(_tabla.Clr(tipo));
+                _il.Emit(OpCodes.Ldloca, temporal);
+                _il.Emit(OpCodes.Initobj, _tabla.Clr(tipo));
+                _il.Emit(OpCodes.Ldloc, temporal);
             }
             else
             {
@@ -190,6 +329,12 @@ public static class EmisorIl
                 case AsignacionEnlazada asignacion:
                     EmitirExpresion(asignacion.Valor);
                     _il.Emit(OpCodes.Stloc, Local(asignacion.Variable));
+                    break;
+
+                case AsignacionCampoEnlazada asignacion:
+                    EmitirReceptor(asignacion.Objeto);
+                    EmitirExpresion(asignacion.Valor);
+                    _il.Emit(OpCodes.Stfld, _tabla.Campos[asignacion.Campo]);
                     break;
 
                 case SiEnlazado si:
@@ -306,7 +451,7 @@ public static class EmisorIl
         {
             if (!_locales.TryGetValue(variable, out var local))
             {
-                local = _il.DeclareLocal(variable.Tipo.TipoClr);
+                local = _il.DeclareLocal(_tabla.Clr(variable.Tipo));
                 _locales[variable] = local;
             }
 
@@ -315,7 +460,7 @@ public static class EmisorIl
 
         // ----- Expresiones -----
 
-        private void EmitirExpresion(ExpresionEnlazada expresion)
+        public void EmitirExpresion(ExpresionEnlazada expresion)
         {
             switch (expresion)
             {
@@ -325,6 +470,40 @@ public static class EmisorIl
 
                 case VariableEnlazada variable:
                     EmitirCargaDeVariable(variable.Variable);
+                    break;
+
+                case EsteEnlazado este:
+                    _il.Emit(OpCodes.Ldarg_0);
+                    if (este.TipoUsuario.EsEstructura)
+                    {
+                        // En una estructura 'este' es un puntero: para usarlo como valor hay que leerlo.
+                        _il.Emit(OpCodes.Ldobj, _tabla.Clr(este.TipoUsuario));
+                    }
+
+                    break;
+
+                case CampoEnlazado campo:
+                    EmitirReceptorDeLectura(campo.Objeto);
+                    _il.Emit(OpCodes.Ldfld, _tabla.Campos[campo.Campo]);
+                    break;
+
+                case NuevoEnlazado nuevo:
+                    foreach (var argumento in nuevo.Argumentos)
+                    {
+                        EmitirExpresion(argumento);
+                    }
+
+                    _il.Emit(OpCodes.Newobj, _tabla.Constructores[nuevo.TipoUsuario]);
+                    break;
+
+                case LlamadaMetodoEnlazada llamada:
+                    EmitirReceptor(llamada.Objeto);
+                    foreach (var argumento in llamada.Argumentos)
+                    {
+                        EmitirExpresion(argumento);
+                    }
+
+                    _il.Emit(llamada.Objeto.Tipo.EsEstructura ? OpCodes.Call : OpCodes.Callvirt, _tabla.Metodos[llamada.Metodo]);
                     break;
 
                 case UnariaEnlazada unaria:
@@ -355,7 +534,7 @@ public static class EmisorIl
                         EmitirExpresion(argumento);
                     }
 
-                    _il.Emit(OpCodes.Call, _metodos[llamada.Funcion]);
+                    _il.Emit(OpCodes.Call, _tabla.Metodos[llamada.Funcion]);
                     break;
 
                 case ImprimirEnlazado imprimir:
@@ -373,6 +552,68 @@ public static class EmisorIl
 
                 default:
                     throw new InvalidOperationException($"Expresión no contemplada en la emisión: {expresion.GetType().Name}");
+            }
+        }
+
+        /// <summary>
+        /// Deja en la pila el receptor de una llamada a método o de una escritura de campo: la
+        /// referencia si es una clase, la dirección si es una estructura (para que el método o
+        /// la escritura actúen sobre el original y no sobre una copia).
+        /// </summary>
+        private void EmitirReceptor(ExpresionEnlazada objeto)
+        {
+            if (objeto.Tipo.EsEstructura)
+            {
+                EmitirDireccion(objeto);
+            }
+            else
+            {
+                EmitirExpresion(objeto);
+            }
+        }
+
+        /// <summary>Para leer un campo basta con el valor; en una estructura 'este' ya es un puntero y sirve tal cual.</summary>
+        private void EmitirReceptorDeLectura(ExpresionEnlazada objeto)
+        {
+            if (objeto is EsteEnlazado)
+            {
+                _il.Emit(OpCodes.Ldarg_0);
+            }
+            else
+            {
+                EmitirExpresion(objeto);
+            }
+        }
+
+        /// <summary>Deja en la pila la dirección de una estructura.</summary>
+        private void EmitirDireccion(ExpresionEnlazada objeto)
+        {
+            switch (objeto)
+            {
+                case EsteEnlazado:
+                    _il.Emit(OpCodes.Ldarg_0);
+                    break;
+
+                case VariableEnlazada { Variable.Clase: ClaseDeVariable.Parametro } variable:
+                    _il.Emit(OpCodes.Ldarga, (short)(variable.Variable.IndiceDeParametro + _desplazamientoDeArgumentos));
+                    break;
+
+                case VariableEnlazada variable:
+                    _il.Emit(OpCodes.Ldloca, Local(variable.Variable));
+                    break;
+
+                case CampoEnlazado campo:
+                    EmitirReceptor(campo.Objeto);
+                    _il.Emit(OpCodes.Ldflda, _tabla.Campos[campo.Campo]);
+                    break;
+
+                default:
+                    // Un valor temporal (el resultado de una llamada o de 'nuevo'): se copia a una local.
+                    var temporal = _il.DeclareLocal(_tabla.Clr(objeto.Tipo));
+                    EmitirExpresion(objeto);
+                    _il.Emit(OpCodes.Stloc, temporal);
+                    _il.Emit(OpCodes.Ldloca, temporal);
+                    break;
             }
         }
 
@@ -404,18 +645,23 @@ public static class EmisorIl
         {
             if (variable.Clase == ClaseDeVariable.Parametro)
             {
-                if (variable.IndiceDeParametro <= byte.MaxValue)
-                {
-                    _il.Emit(OpCodes.Ldarg_S, (byte)variable.IndiceDeParametro);
-                }
-                else
-                {
-                    _il.Emit(OpCodes.Ldarg, (short)variable.IndiceDeParametro);
-                }
+                EmitirCargaDeArgumento(_il, variable.IndiceDeParametro + _desplazamientoDeArgumentos);
             }
             else
             {
                 _il.Emit(OpCodes.Ldloc, Local(variable));
+            }
+        }
+
+        public static void EmitirCargaDeArgumento(ILGenerator il, int indice)
+        {
+            if (indice <= byte.MaxValue)
+            {
+                il.Emit(OpCodes.Ldarg_S, (byte)indice);
+            }
+            else
+            {
+                il.Emit(OpCodes.Ldarg, (short)indice);
             }
         }
 
@@ -536,6 +782,12 @@ public static class EmisorIl
                 return;
             }
 
+            if (ReferenceEquals(origen, TipoLince.Nulo) && destino.EsReferencia)
+            {
+                // nulo → texto o clase: la referencia nula ya está en la pila.
+                return;
+            }
+
             if (ReferenceEquals(destino, TipoLince.Texto))
             {
                 if (ReferenceEquals(origen, TipoLince.Entero))
@@ -558,7 +810,6 @@ public static class EmisorIl
                     _il.MarkLabel(fin);
                 }
 
-                // texto → texto y nulo → texto no necesitan instrucciones.
                 return;
             }
 

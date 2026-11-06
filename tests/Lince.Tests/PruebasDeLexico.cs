@@ -48,7 +48,12 @@ public class PruebasDeLexico
     [InlineData("texto", TipoToken.PalabraTexto)]
     [InlineData("logico", TipoToken.PalabraLogico)]
     [InlineData("nada", TipoToken.PalabraNada)]
-    [InlineData("clase", TipoToken.PalabraReservada)]
+    [InlineData("clase", TipoToken.PalabraClase)]
+    [InlineData("estructura", TipoToken.PalabraEstructura)]
+    [InlineData("nuevo", TipoToken.PalabraNuevo)]
+    [InlineData("este", TipoToken.PalabraEste)]
+    [InlineData("privado", TipoToken.PalabraPrivado)]
+    [InlineData("importar", TipoToken.PalabraReservada)]
     [InlineData("Sea", TipoToken.Identificador)]
     public void Distingue_cada_palabra_clave(string texto, TipoToken esperado)
     {

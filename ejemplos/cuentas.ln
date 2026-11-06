@@ -1,0 +1,77 @@
+// Clases y estructuras: campos, métodos, constructor, privado, este.
+
+estructura Punto {
+    x: decimal;
+    y: decimal;
+
+    funcion distanciaAlOrigen(): decimal {
+        regresar raizCuadrada(x * x + y * y);
+    }
+
+    funcion mover(dx: decimal, dy: decimal) {
+        x += dx;
+        y += dy;
+    }
+}
+
+clase Cuenta {
+    titular: texto;
+    privado saldo: decimal = 0;
+    movimientos: entero = 0;
+
+    funcion nuevo(titular: texto, inicial: decimal) {
+        este.titular = titular;
+        saldo = inicial;
+    }
+
+    funcion depositar(monto: decimal) {
+        si monto <= 0 {
+            imprimir("el depósito debe ser positivo");
+            regresar;
+        }
+        saldo += monto;
+        movimientos += 1;
+    }
+
+    funcion retirar(monto: decimal): logico {
+        si monto > saldo {
+            regresar falso;
+        }
+        saldo -= monto;
+        movimientos += 1;
+        regresar verdadero;
+    }
+
+    funcion describir(): texto {
+        regresar titular + ": " + saldo + " (" + movimientos + " movimientos)";
+    }
+}
+
+// Raíz cuadrada por el método de Newton; cuando llegue la interoperabilidad será Math.Sqrt.
+funcion raizCuadrada(valor: decimal): decimal {
+    var aproximacion = valor / 2;
+    para i en 0..20 {
+        aproximacion = (aproximacion + valor / aproximacion) / 2;
+    }
+    regresar aproximacion;
+}
+
+funcion principal() {
+    sea cuenta = nuevo Cuenta("Ana", 100);
+    cuenta.depositar(50);
+    cuenta.depositar(-5);
+    si !cuenta.retirar(500) {
+        imprimir("fondos insuficientes para retirar 500");
+    }
+    cuenta.retirar(30);
+    imprimir(cuenta.describir());
+
+    var p = nuevo Punto(3, 4);
+    imprimir(p.distanciaAlOrigen());
+    p.mover(3, 4);
+    imprimir(p.x + ", " + p.y);
+
+    sea copia = p;
+    p.mover(1, 1);
+    imprimir("copia: " + copia.x + ", original: " + p.x);
+}

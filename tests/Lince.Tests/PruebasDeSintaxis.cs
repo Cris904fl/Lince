@@ -143,9 +143,9 @@ public class PruebasDeSintaxis
     [Fact]
     public void Una_palabra_reservada_da_LN2004()
     {
-        var arbol = ArbolSintaxis.Analizar("funcion f() { clase x = 1; }");
+        var arbol = ArbolSintaxis.Analizar("funcion f() { importar x = 1; }");
 
-        Assert.Contains(arbol.Diagnosticos, d => d.Codigo == Codigos.PalabraReservada && d.Mensaje.Contains("'clase'"));
+        Assert.Contains(arbol.Diagnosticos, d => d.Codigo == Codigos.PalabraReservada && d.Mensaje.Contains("'importar'"));
     }
 
     [Fact]
@@ -160,13 +160,22 @@ public class PruebasDeSintaxis
     }
 
     [Fact]
-    public void Un_tipo_desconocido_da_LN2005()
+    public void Algo_que_no_puede_ser_un_tipo_da_LN2005()
     {
-        var arbol = ArbolSintaxis.Analizar("funcion f(a: numero) { }");
+        var arbol = ArbolSintaxis.Analizar("funcion f(a: 3) { }");
 
         var error = Assert.Single(arbol.Diagnosticos);
         Assert.Equal(Codigos.SeEsperabaTipo, error.Codigo);
         Assert.Equal(14, error.Columna);
+    }
+
+    [Fact]
+    public void Un_nombre_de_tipo_desconocido_se_acepta_en_la_sintaxis_y_lo_resuelve_el_enlazador()
+    {
+        var arbol = ArbolSintaxis.Analizar("funcion f(a: numero): numero { regresar a; }");
+
+        Assert.Empty(arbol.Diagnosticos);
+        Assert.Equal("numero", arbol.Raiz.Funciones[0].Parametros[0].Tipo.Palabra.Texto);
     }
 
     [Fact]

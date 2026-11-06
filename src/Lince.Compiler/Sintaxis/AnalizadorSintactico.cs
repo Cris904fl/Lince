@@ -65,75 +65,82 @@ public sealed class AnalizadorSintactico
     private Token Faltante(TipoToken tipo) =>
         new(tipo, Palabras.TextoFijo(tipo), null, new Ubicacion(_archivo, Actual.Ubicacion.Inicio, 0), EsFaltante: true);
 
-    private void InformarInesperado(string queSeEsperaba)
+    /// <summary>Informa un error en la posición actual, salvo que ya haya uno ahí.</summary>
+    private void Informar(string codigo, string mensaje)
     {
-        // Un solo diagnóstico por posición: varios "se esperaba" sobre el mismo token confunden.
         if (_posicionDelUltimoError == _posicion)
         {
             return;
         }
 
         _posicionDelUltimoError = _posicion;
+        _diagnosticos.Error(codigo, Actual.Ubicacion, mensaje);
+    }
 
+    private void InformarInesperado(string queSeEsperaba)
+    {
         if (Actual.Tipo == TipoToken.PalabraReservada)
         {
-            _diagnosticos.Error(Codigos.PalabraReservada, Actual.Ubicacion,
+            Informar(Codigos.PalabraReservada,
                 $"'{Actual.Texto}' es una palabra reservada para una versión futura del lenguaje y no puede usarse aquí");
             return;
         }
 
-        var encontrado = Actual.Tipo switch
-        {
-            TipoToken.FinDeArchivo => "el fin del archivo",
-            TipoToken.Invalido => $"'{Actual.Texto}'",
-            _ => $"'{Actual.Texto}'",
-        };
-        _diagnosticos.Error(Codigos.TokenInesperado, Actual.Ubicacion, $"{queSeEsperaba} pero se encontró {encontrado}");
+        Informar(Codigos.TokenInesperado, $"{queSeEsperaba} pero se encontró {DescribirActual()}");
     }
 
-    // ----- Programa y funciones -----
+    private string DescribirActual() => Actual.Tipo == TipoToken.FinDeArchivo ? "el fin del archivo" : $"'{Actual.Texto}'";
+
+    // ----- Programa y declaraciones -----
 
     public ProgramaSintaxis AnalizarPrograma()
     {
-        var funciones = ImmutableArray.CreateBuilder<FuncionSintaxis>();
+        var declaraciones = ImmutableArray.CreateBuilder<DeclaracionSintaxis>();
         while (Actual.Tipo != TipoToken.FinDeArchivo)
         {
-            if (Actual.Tipo == TipoToken.PalabraFuncion)
+            var modificador = LeerModificador();
+
+            switch (Actual.Tipo)
             {
-                funciones.Add(AnalizarFuncion());
-                continue;
+                case TipoToken.PalabraFuncion:
+                    declaraciones.Add(AnalizarFuncion(modificador));
+                    continue;
+                case TipoToken.PalabraClase or TipoToken.PalabraEstructura when modificador is null:
+                    declaraciones.Add(AnalizarTipoDeclarado());
+                    continue;
             }
 
             InformarDeclaracionEsperada();
-            // Saltar hasta la siguiente función para no arrastrar el error por todo el archivo.
-            while (Actual.Tipo is not (TipoToken.PalabraFuncion or TipoToken.FinDeArchivo))
+            // Saltar hasta la siguiente declaración para no arrastrar el error por todo el archivo.
+            while (Actual.Tipo is not (TipoToken.PalabraFuncion or TipoToken.PalabraClase or TipoToken.PalabraEstructura or TipoToken.FinDeArchivo))
             {
                 Avanzar();
             }
         }
 
-        return new ProgramaSintaxis(_archivo, funciones.ToImmutable(), Coincidir(TipoToken.FinDeArchivo));
+        return new ProgramaSintaxis(_archivo, declaraciones.ToImmutable(), Coincidir(TipoToken.FinDeArchivo));
     }
+
+    private Token? LeerModificador() =>
+        Actual.Tipo is TipoToken.PalabraPrivado or TipoToken.PalabraPublico ? Avanzar() : null;
 
     private void InformarDeclaracionEsperada()
     {
-        if (_posicionDelUltimoError == _posicion)
+        var pista = Actual.Tipo switch
         {
-            return;
-        }
-
-        _posicionDelUltimoError = _posicion;
-        var pista = Actual.Tipo is TipoToken.PalabraSea or TipoToken.PalabraVar
-            ? " (las variables solo pueden declararse dentro de una función)"
-            : "";
-        _diagnosticos.Error(Codigos.SeEsperabaDeclaracion, Actual.Ubicacion,
-            $"se esperaba 'funcion' pero se encontró '{Actual.Texto}'{pista}");
+            TipoToken.PalabraSea or TipoToken.PalabraVar => " (las variables solo pueden declararse dentro de una función)",
+            TipoToken.Identificador when Mirar(1).Tipo == TipoToken.DosPuntos => " (los campos solo pueden declararse dentro de una clase o estructura)",
+            _ => "",
+        };
+        Informar(Codigos.SeEsperabaDeclaracion,
+            $"se esperaba 'funcion', 'clase' o 'estructura' pero se encontró {DescribirActual()}{pista}");
     }
 
-    private FuncionSintaxis AnalizarFuncion()
+    private FuncionSintaxis AnalizarFuncion(Token? modificador)
     {
         var palabra = Coincidir(TipoToken.PalabraFuncion);
-        var nombre = Coincidir(TipoToken.Identificador);
+        // El constructor se llama 'nuevo', que es palabra clave: se acepta aquí como nombre.
+        var nombre = Actual.Tipo == TipoToken.PalabraNuevo ? Avanzar() : Coincidir(TipoToken.Identificador);
         var abre = Coincidir(TipoToken.ParentesisAbre);
         var parametros = AnalizarParametros();
         var cierra = Coincidir(TipoToken.ParentesisCierra);
@@ -146,7 +153,7 @@ public sealed class AnalizadorSintactico
         }
 
         var cuerpo = AnalizarBloque();
-        return new FuncionSintaxis(palabra, nombre, abre, parametros, cierra, tipoRetorno, cuerpo);
+        return new FuncionSintaxis(modificador, palabra, nombre, abre, parametros, cierra, tipoRetorno, cuerpo);
     }
 
     private ImmutableArray<ParametroSintaxis> AnalizarParametros()
@@ -186,27 +193,81 @@ public sealed class AnalizadorSintactico
 
     private TipoSintaxis AnalizarTipo()
     {
-        if (Palabras.EsTipo(Actual.Tipo))
+        if (Palabras.EsTipo(Actual.Tipo) || Actual.Tipo == TipoToken.Identificador)
         {
             return new TipoSintaxis(Avanzar());
         }
 
-        if (_posicionDelUltimoError != _posicion)
-        {
-            _posicionDelUltimoError = _posicion;
-            _diagnosticos.Error(Codigos.SeEsperabaTipo, Actual.Ubicacion,
-                $"se esperaba un tipo (entero, decimal, texto, logico o nada) pero se encontró '{Actual.Texto}'");
-        }
+        Informar(Codigos.SeEsperabaTipo,
+            $"se esperaba un tipo (entero, decimal, texto, logico, nada o el nombre de una clase o estructura) pero se encontró {DescribirActual()}");
 
         var faltante = Faltante(TipoToken.PalabraNada);
-        if (Actual.Tipo == TipoToken.Identificador)
+        if (Actual.Tipo is TipoToken.LiteralEntero or TipoToken.LiteralDecimal or TipoToken.LiteralTexto
+            or TipoToken.PalabraReservada or TipoToken.Invalido)
         {
-            // Escribió un nombre de tipo que no existe: se consume para que el resto de la
-            // firma se lea bien y el error quede en uno solo.
+            // Escribió algo en el lugar del tipo que no puede ser otra cosa: se consume para que
+            // el resto de la firma se lea bien y el error quede en uno solo.
             Avanzar();
         }
 
         return new TipoSintaxis(faltante);
+    }
+
+    private TipoDeclaradoSintaxis AnalizarTipoDeclarado()
+    {
+        var palabra = Avanzar();
+        var nombre = Coincidir(TipoToken.Identificador);
+        var abre = Coincidir(TipoToken.LlaveAbre);
+        var miembros = ImmutableArray.CreateBuilder<DeclaracionSintaxis>();
+
+        while (Actual.Tipo is not (TipoToken.LlaveCierra or TipoToken.FinDeArchivo))
+        {
+            var posicionInicial = _posicion;
+            var modificador = LeerModificador();
+
+            if (Actual.Tipo == TipoToken.PalabraFuncion)
+            {
+                miembros.Add(AnalizarFuncion(modificador));
+            }
+            else if (Actual.Tipo == TipoToken.Identificador)
+            {
+                miembros.Add(AnalizarCampo(modificador));
+            }
+            else
+            {
+                var que = palabra.Tipo == TipoToken.PalabraClase ? "la clase" : "la estructura";
+                Informar(Codigos.SeEsperabaMiembro,
+                    $"se esperaba un campo (nombre: tipo;) o una función dentro de {que} '{nombre.Texto}' pero se encontró {DescribirActual()}");
+                Avanzar();
+                Sincronizar();
+            }
+
+            if (_posicion == posicionInicial)
+            {
+                Avanzar();
+            }
+        }
+
+        var cierra = Coincidir(TipoToken.LlaveCierra);
+        return new TipoDeclaradoSintaxis(palabra, nombre, abre, miembros.ToImmutable(), cierra);
+    }
+
+    private CampoSintaxis AnalizarCampo(Token? modificador)
+    {
+        var nombre = Coincidir(TipoToken.Identificador);
+        var dosPuntos = Coincidir(TipoToken.DosPuntos);
+        var tipo = AnalizarTipo();
+
+        Token? igual = null;
+        ExpresionSintaxis? inicial = null;
+        if (Actual.Tipo == TipoToken.Igual)
+        {
+            igual = Avanzar();
+            inicial = AnalizarExpresion();
+        }
+
+        var puntoYComa = Coincidir(TipoToken.PuntoYComa);
+        return new CampoSintaxis(modificador, nombre, dosPuntos, tipo, igual, inicial, puntoYComa);
     }
 
     // ----- Sentencias -----
@@ -255,7 +316,8 @@ public sealed class AnalizadorSintactico
             if (Actual.Tipo is TipoToken.LlaveCierra or TipoToken.LlaveAbre
                 or TipoToken.PalabraSea or TipoToken.PalabraVar or TipoToken.PalabraSi
                 or TipoToken.PalabraMientras or TipoToken.PalabraPara or TipoToken.PalabraRegresar
-                or TipoToken.PalabraRomper or TipoToken.PalabraContinuar or TipoToken.PalabraFuncion)
+                or TipoToken.PalabraRomper or TipoToken.PalabraContinuar or TipoToken.PalabraFuncion
+                or TipoToken.PalabraClase or TipoToken.PalabraEstructura)
             {
                 return;
             }
@@ -285,10 +347,8 @@ public sealed class AnalizadorSintactico
                 return new RomperSintaxis(Avanzar(), Coincidir(TipoToken.PuntoYComa));
             case TipoToken.PalabraContinuar:
                 return new ContinuarSintaxis(Avanzar(), Coincidir(TipoToken.PuntoYComa));
-            case TipoToken.Identificador when EsOperadorDeAsignacion(Mirar(1).Tipo):
-                return AnalizarAsignacion();
             default:
-                return AnalizarExpresionSentencia();
+                return AnalizarExpresionOAsignacion();
         }
     }
 
@@ -313,13 +373,29 @@ public sealed class AnalizadorSintactico
         return new DeclaracionVariableSintaxis(palabra, nombre, tipo, igual, valor, puntoYComa);
     }
 
-    private AsignacionSintaxis AnalizarAsignacion()
+    /// <summary>
+    /// Una sentencia que empieza por una expresión: si sigue un operador de asignación es una
+    /// asignación (y el objetivo debe ser un nombre o un miembro); si no, una expresión suelta.
+    /// </summary>
+    private SentenciaSintaxis AnalizarExpresionOAsignacion()
     {
-        var nombre = Avanzar();
+        var expresion = AnalizarExpresion();
+
+        if (!EsOperadorDeAsignacion(Actual.Tipo))
+        {
+            return new ExpresionSentenciaSintaxis(expresion, Coincidir(TipoToken.PuntoYComa));
+        }
+
+        if (expresion is not (NombreSintaxis or MiembroSintaxis))
+        {
+            _diagnosticos.Error(Codigos.ObjetivoDeAsignacionInvalido, expresion.Ubicacion,
+                "el lado izquierdo de una asignación debe ser una variable o un campo (objeto.campo)");
+        }
+
         var operador = Avanzar();
         var valor = AnalizarExpresion();
         var puntoYComa = Coincidir(TipoToken.PuntoYComa);
-        return new AsignacionSintaxis(nombre, operador, valor, puntoYComa);
+        return new AsignacionSintaxis(expresion, operador, valor, puntoYComa);
     }
 
     private SiSintaxis AnalizarSi()
@@ -372,13 +448,6 @@ public sealed class AnalizadorSintactico
         return new RegresarSintaxis(palabra, valor, puntoYComa);
     }
 
-    private ExpresionSentenciaSintaxis AnalizarExpresionSentencia()
-    {
-        var expresion = AnalizarExpresion();
-        var puntoYComa = Coincidir(TipoToken.PuntoYComa);
-        return new ExpresionSentenciaSintaxis(expresion, puntoYComa);
-    }
-
     // ----- Expresiones (precedencia ascendente) -----
 
     public ExpresionSintaxis AnalizarExpresion() => AnalizarBinaria(0);
@@ -394,8 +463,6 @@ public sealed class AnalizadorSintactico
         TipoToken.Asterisco or TipoToken.Barra or TipoToken.Porcentaje => 6,
         _ => 0,
     };
-
-    private const int PrecedenciaUnaria = 7;
 
     private ExpresionSintaxis AnalizarBinaria(int precedenciaMinima)
     {
@@ -430,15 +497,26 @@ public sealed class AnalizadorSintactico
     private ExpresionSintaxis AnalizarPostfija()
     {
         var expresion = AnalizarPrimaria();
-        while (Actual.Tipo == TipoToken.ParentesisAbre)
+        while (true)
         {
-            var abre = Avanzar();
-            var argumentos = AnalizarArgumentos();
-            var cierra = Coincidir(TipoToken.ParentesisCierra);
-            expresion = new LlamadaSintaxis(expresion, abre, argumentos, cierra);
+            if (Actual.Tipo == TipoToken.ParentesisAbre)
+            {
+                var abre = Avanzar();
+                var argumentos = AnalizarArgumentos();
+                var cierra = Coincidir(TipoToken.ParentesisCierra);
+                expresion = new LlamadaSintaxis(expresion, abre, argumentos, cierra);
+            }
+            else if (Actual.Tipo == TipoToken.Punto)
+            {
+                var punto = Avanzar();
+                var nombre = Coincidir(TipoToken.Identificador);
+                expresion = new MiembroSintaxis(expresion, punto, nombre);
+            }
+            else
+            {
+                return expresion;
+            }
         }
-
-        return expresion;
     }
 
     private ImmutableArray<ExpresionSintaxis> AnalizarArgumentos()
@@ -479,6 +557,21 @@ public sealed class AnalizadorSintactico
             case TipoToken.Identificador:
                 return new NombreSintaxis(Avanzar());
 
+            case TipoToken.PalabraEste:
+                return new EsteSintaxis(Avanzar());
+
+            case TipoToken.PalabraNuevo:
+                {
+                    var palabra = Avanzar();
+                    var tipo = Actual.Tipo == TipoToken.Identificador || Palabras.EsTipo(Actual.Tipo)
+                        ? Avanzar()
+                        : Coincidir(TipoToken.Identificador);
+                    var abre = Coincidir(TipoToken.ParentesisAbre);
+                    var argumentos = AnalizarArgumentos();
+                    var cierra = Coincidir(TipoToken.ParentesisCierra);
+                    return new NuevoSintaxis(palabra, tipo, abre, argumentos, cierra);
+                }
+
             case TipoToken.ParentesisAbre:
                 {
                     var abre = Avanzar();
@@ -488,19 +581,14 @@ public sealed class AnalizadorSintactico
                 }
 
             default:
-                if (_posicionDelUltimoError != _posicion)
+                if (Actual.Tipo == TipoToken.PalabraReservada)
                 {
-                    _posicionDelUltimoError = _posicion;
-                    if (Actual.Tipo == TipoToken.PalabraReservada)
-                    {
-                        _diagnosticos.Error(Codigos.PalabraReservada, Actual.Ubicacion,
-                            $"'{Actual.Texto}' es una palabra reservada para una versión futura del lenguaje y no puede usarse aquí");
-                    }
-                    else
-                    {
-                        var encontrado = Actual.Tipo == TipoToken.FinDeArchivo ? "el fin del archivo" : $"'{Actual.Texto}'";
-                        _diagnosticos.Error(Codigos.SeEsperabaExpresion, Actual.Ubicacion, $"se esperaba una expresión pero se encontró {encontrado}");
-                    }
+                    Informar(Codigos.PalabraReservada,
+                        $"'{Actual.Texto}' es una palabra reservada para una versión futura del lenguaje y no puede usarse aquí");
+                }
+                else
+                {
+                    Informar(Codigos.SeEsperabaExpresion, $"se esperaba una expresión pero se encontró {DescribirActual()}");
                 }
 
                 return new NombreSintaxis(Faltante(TipoToken.Identificador));

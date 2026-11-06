@@ -32,6 +32,12 @@ public enum TipoToken
     PalabraTexto,
     PalabraLogico,
     PalabraNada,
+    PalabraClase,
+    PalabraEstructura,
+    PalabraNuevo,
+    PalabraEste,
+    PalabraPrivado,
+    PalabraPublico,
 
     /// <summary>Reservada para fases siguientes; usarla hoy es un error de sintaxis.</summary>
     PalabraReservada,
@@ -44,6 +50,7 @@ public enum TipoToken
     Coma,
     PuntoYComa,
     DosPuntos,
+    Punto,
     PuntoPunto,
 
     // Operadores aritméticos

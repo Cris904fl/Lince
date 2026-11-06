@@ -255,6 +255,7 @@ public sealed class AnalizadorLexico
             case ';': tipo = TipoToken.PuntoYComa; break;
             case ':': tipo = TipoToken.DosPuntos; break;
             case '.' when s == '.': _posicion++; tipo = TipoToken.PuntoPunto; break;
+            case '.': tipo = TipoToken.Punto; break;
             case '+' when s == '=': _posicion++; tipo = TipoToken.MasIgual; break;
             case '+': tipo = TipoToken.Mas; break;
             case '-' when s == '=': _posicion++; tipo = TipoToken.MenosIgual; break;
