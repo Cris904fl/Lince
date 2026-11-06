@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Lince.Cli/Lince.Cli.csproj" />
+    <Project Path="src/Lince.Compiler/Lince.Compiler.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Lince.Tests/Lince.Tests.csproj" />
+  </Folder>
+</Solution>

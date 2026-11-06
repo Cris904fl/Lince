@@ -1,0 +1,13 @@
+# Salidas de compilación de .NET
+bin/
+obj/
+nupkg/
+*.user
+*.suo
+.vs/
+.idea/
+TestResults/
+
+# Salidas del compilador Lince
+*.ln.dll
+salida/

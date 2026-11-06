@@ -1,0 +1,16 @@
+// Decimales: conversión implícita de entero, promedio y comparación mixta.
+
+funcion promedio(a: decimal, b: decimal, c: decimal): decimal {
+    regresar (a + b + c) / 3;
+}
+
+funcion principal() {
+    sea nota = promedio(4, 3.5, 5);
+    imprimir("Promedio: " + nota);
+    si nota >= 3 {
+        imprimir("aprobado: " + (nota >= 3));
+    } sino {
+        imprimir("reprobado");
+    }
+    imprimir(-nota * 2);
+}

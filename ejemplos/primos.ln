@@ -1,0 +1,34 @@
+// Primos hasta un límite: mientras, var, asignación compuesta, lógicos y romper.
+
+funcion esPrimo(n: entero): logico {
+    si n < 2 {
+        regresar falso;
+    }
+    var divisor = 2;
+    mientras divisor * divisor <= n {
+        si n % divisor == 0 {
+            regresar falso;
+        }
+        divisor += 1;
+    }
+    regresar verdadero;
+}
+
+funcion principal(): entero {
+    sea limite = 50;
+    var encontrados = 0;
+    var listado = "";
+    para n en 2..limite {
+        si !esPrimo(n) {
+            continuar;
+        }
+        encontrados += 1;
+        si listado != "" {
+            listado = listado + ", ";
+        }
+        listado = listado + n;
+    }
+    imprimir("Primos menores que " + limite + ": " + listado);
+    imprimir("Total: " + encontrados);
+    regresar 0;
+}

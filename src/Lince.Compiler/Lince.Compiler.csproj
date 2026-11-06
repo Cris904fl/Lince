@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Lince.Compiler</RootNamespace>
+    <Description>Compilador del lenguaje Lince: léxico, sintaxis, enlace de tipos y emisión de IL.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Lince.Tests" />
+  </ItemGroup>
+
+</Project>

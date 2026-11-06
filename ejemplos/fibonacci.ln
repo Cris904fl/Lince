@@ -1,0 +1,14 @@
+// Fibonacci recursivo: funciones, enteros, si/sino, para y concatenación.
+
+funcion fibonacci(n: entero): entero {
+    si n < 2 {
+        regresar n;
+    }
+    regresar fibonacci(n - 1) + fibonacci(n - 2);
+}
+
+funcion principal() {
+    para i en 0..10 {
+        imprimir("fib(" + i + ") = " + fibonacci(i));
+    }
+}
