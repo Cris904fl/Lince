@@ -1,7 +1,7 @@
 # Especificación del lenguaje Lince
 
-> Versión 0.4 (fase 3: colecciones y funciones como valores). Este documento es la referencia
-> de la sintaxis y la semántica que el compilador implementa hoy. Cada cambio al lenguaje se
+> Versión 0.5 (fase 4a: interoperabilidad con .NET). Este documento es la referencia de la
+> sintaxis y la semántica que el compilador implementa hoy. Cada cambio al lenguaje se
 > refleja aquí en el mismo trabajo.
 
 Lince es un lenguaje de propósito general, de tipado estático, con palabras clave en español y
@@ -40,15 +40,15 @@ Estas palabras están reservadas y no pueden usarse como identificadores:
 
 | Grupo      | Palabras                                                                   |
 | ---------- | -------------------------------------------------------------------------- |
-| Declaración| `funcion` `sea` `var` `clase` `estructura` `privado` `publico`             |
+| Declaración| `funcion` `sea` `var` `clase` `estructura` `privado` `publico` `importar`  |
 | Control    | `si` `sino` `mientras` `para` `en` `regresar` `romper` `continuar`         |
 | Objetos    | `nuevo` `este`                                                             |
 | Literales  | `verdadero` `falso` `nulo`                                                 |
 | Tipos      | `entero` `decimal` `texto` `logico` `nada` `lista` `mapa`                  |
 
 Además quedan reservadas para fases siguientes, y hoy producen el error `LN2004` si se usan:
-`modulo`, `importar`, `segun`, `caso`, `intentar`, `capturar`, `lanzar`, `interfaz`,
-`enumeracion`, `hereda`, `asincrono`, `esperar`.
+`modulo`, `segun`, `caso`, `intentar`, `capturar`, `lanzar`, `interfaz`, `enumeracion`,
+`hereda`, `asincrono`, `esperar`.
 
 ### 1.4 Literales
 
@@ -83,7 +83,8 @@ Un literal `entero` que no cabe en 64 bits es un error (`LN1003`).
 Notación EBNF: `{ x }` cero o más veces, `[ x ]` opcional, `|` alternativa.
 
 ```ebnf
-programa             = { declaracion_funcion | declaracion_tipo } ;
+programa             = { declaracion_funcion | declaracion_tipo | importacion } ;
+importacion          = "importar" identificador { "." identificador } ";" ;
 
 declaracion_funcion  = [ modificador ] "funcion" ( identificador | "nuevo" )
                        "(" [ parametros ] ")" [ ":" tipo ] bloque ;
@@ -413,6 +414,57 @@ lambda o del valor inicial):
 | `unir(separador)`               | `texto`     | Solo `lista<texto>`                          |
 
 Todos devuelven listas nuevas; ninguno cambia la lista original.
+
+### 3.7 Interoperabilidad con .NET
+
+```
+importar System.Text;
+importar System.IO;
+
+funcion principal() {
+    imprimir(Math.Sqrt(2.0));                  // método estático
+    sea sb = nuevo StringBuilder();            // constructor de .NET
+    sb.Append("Hola").Append("!");             // métodos de instancia, con sobrecargas
+    imprimir(sb.Length);                       // propiedad
+    sea hoy = DateTime.Now;                    // estructura de .NET
+    si hoy.DayOfWeek == DayOfWeek.Friday { }   // enumeración
+    File.WriteAllText(Path.GetTempFileName(), sb.ToString());
+    imprimir("lince".ToUpper());               // lo que .NET da a los tipos básicos
+}
+```
+
+Cualquier tipo público de .NET se usa **con su nombre original y sus miembros originales**,
+con mayúsculas como en .NET. `importar Espacio.De.Nombres;` hace visibles sus tipos a secas;
+`System` siempre está importado. Un espacio que no existe es `LN3060`.
+
+- **Qué se puede hacer.** Llamar métodos estáticos y de instancia, crear objetos y
+  estructuras con `nuevo`, leer y escribir propiedades y campos, usar las constantes y las
+  enumeraciones (`DayOfWeek.Friday`), pasar lambdas donde .NET espera un `Func` o `Action`,
+  y usar tipos de .NET como tipo de variables, parámetros, campos y retornos. Los parámetros
+  opcionales de .NET se pueden omitir.
+- **Sobrecargas.** Se elige la que mejor encaja con los tipos de los argumentos; si varias
+  encajan igual, la primera que declara .NET. Si ninguna encaja, el error `LN3063` lista las
+  que hay. Un miembro que no existe es `LN3062`, con sugerencias; recuerde las mayúsculas.
+- **La frontera.** Los tipos se traducen al cruzar: `long` es `entero`, `double` es `decimal`,
+  `string` es `texto`, `bool` es `logico`, `List<T>` y `Dictionary<K, V>` son `lista` y
+  `mapa`, `Func` y `Action` son tipos función. Los enteros cortos de .NET (`int`, `short`,
+  `byte`...) y `float` se ven como `entero` y `decimal`: el compilador convierte al entrar
+  y al salir, sin comprobar desbordamiento. Un `char` se ve como un `texto` de un carácter.
+  Cualquier valor de Lince cabe en un parámetro `object`. Lo demás (`StringBuilder`,
+  `DateTime`, `string[]`...) es un **tipo externo**: se usa tal cual, se imprime y concatena
+  con su `ToString`, y se compara con `==` solo si es una referencia o una enumeración.
+- **Nulos.** Lo que viene de .NET se toma como no nulo (como C# antes de los tipos de
+  referencia anulables); un tipo externo admite `?` como cualquier otra referencia.
+- **Un nombre de tipo no es un valor** (`sea m = Math;` es `LN3061`): solo sirve como
+  receptor de miembros estáticos o con `nuevo`.
+- **Todavía no**: métodos genéricos de .NET (salvo los que Lince envuelve, como `filtrar`),
+  indexadores, eventos, `params`, métodos de extensión, `ref`/`out`, y tipos cuyos miembros
+  usan tipos que Lince no traduce (`LN3064`). Las clases de Lince pasan a .NET solo como
+  `object`.
+
+Los tipos básicos de Lince (`texto`, `entero`, `decimal`, las listas y los mapas) exponen,
+además de sus miembros en español, los del tipo de .NET que los respalda: si un nombre no
+está en la tabla de Lince se busca en .NET (`"abc".ToUpper()`, `numeros.Sort()`).
 
 ## 4. Declaraciones
 

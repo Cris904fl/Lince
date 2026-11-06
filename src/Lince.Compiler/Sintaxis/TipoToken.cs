@@ -40,6 +40,7 @@ public enum TipoToken
     PalabraPublico,
     PalabraLista,
     PalabraMapa,
+    PalabraImportar,
 
     /// <summary>Reservada para fases siguientes; usarla hoy es un error de sintaxis.</summary>
     PalabraReservada,

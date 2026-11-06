@@ -24,6 +24,9 @@ public class TipoLince
     /// </summary>
     public static readonly TipoLince Error = new("?", typeof(object));
 
+    /// <summary>El "tipo" de un nombre de tipo de .NET usado como receptor (<c>Math</c> en <c>Math.Sqrt(2.0)</c>); no es un valor.</summary>
+    public static readonly TipoLince NombreDeTipo = new("tipo", typeof(object));
+
     private readonly Type? _tipoClr;
 
     protected TipoLince(string nombre, Type? tipoClr)
@@ -41,14 +44,17 @@ public class TipoLince
 
     public bool EsNumerico => ReferenceEquals(this, Entero) || ReferenceEquals(this, Decimal);
 
-    /// <summary>Tipos con los que se puede concatenar un texto o imprimir. Un <c>texto?</c> también: nulo se escribe vacío.</summary>
+    /// <summary>Tipos con los que se puede concatenar un texto o imprimir. Un <c>texto?</c> también: nulo se escribe vacío; un tipo de .NET, con su ToString.</summary>
     public bool SePuedeEscribir => ReferenceEquals(this, Entero) || ReferenceEquals(this, Decimal)
         || ReferenceEquals(this, Texto) || ReferenceEquals(this, Logico) || ReferenceEquals(this, Nulo)
-        || this is TipoNulable { Base: var b } && ReferenceEquals(b, Texto);
+        || this is TipoNulable { Base: var b } && ReferenceEquals(b, Texto)
+        || SinNulo is TipoExterno;
 
     /// <summary>Tipos por referencia: se pueden hacer nulables y se comparan por identidad.</summary>
     public bool EsReferencia => ReferenceEquals(this, Texto) || this is TipoUsuario { EsEstructura: false } || this is TipoNulable
-        || this is TipoGenerico || this is TipoFuncion;
+        || this is TipoGenerico || this is TipoFuncion || this is TipoExterno { EsValor: false };
+
+    public bool EsExterno => SinNulo is TipoExterno;
 
     private static readonly Dictionary<string, TipoFuncion> _funciones = new();
 
@@ -95,7 +101,24 @@ public class TipoLince
         }
     }
 
-    public bool EsEstructura => this is TipoUsuario { EsEstructura: true };
+    public bool EsEstructura => this is TipoUsuario { EsEstructura: true } || this is TipoExterno { EsValor: true };
+
+    private static readonly Dictionary<Type, TipoExterno> _externos = new();
+
+    /// <summary>El tipo de Lince que envuelve un tipo de .NET sin equivalente propio, único por tipo.</summary>
+    public static TipoExterno Externo(Type tipo)
+    {
+        lock (_externos)
+        {
+            if (!_externos.TryGetValue(tipo, out var externo))
+            {
+                externo = new TipoExterno(tipo);
+                _externos[tipo] = externo;
+            }
+
+            return externo;
+        }
+    }
 
     public bool EsNulable => this is TipoNulable;
 
@@ -148,6 +171,25 @@ public sealed class TipoNulable : TipoLince
     }
 
     public TipoLince Base { get; }
+}
+
+/// <summary>
+/// Un tipo de .NET sin equivalente en Lince (<c>StringBuilder</c>, <c>DateTime</c>, una
+/// enumeración), usado tal cual a través de la interoperabilidad. Sus miembros se resuelven
+/// por reflexión con sus nombres originales.
+/// </summary>
+public sealed class TipoExterno : TipoLince
+{
+    internal TipoExterno(Type tipo)
+        : base(tipo.Name, tipo)
+    {
+        EsValor = tipo.IsValueType;
+        EsEnumeracion = tipo.IsEnum;
+    }
+
+    public bool EsValor { get; }
+
+    public bool EsEnumeracion { get; }
 }
 
 /// <summary>

@@ -69,15 +69,28 @@ Lo que hace cómodo a Python: `datos.filtrar(f => f.edad > 30)`.
 La fase técnica más dura del proyecto y la que más devuelve: a partir de aquí cada librería de
 .NET es un `importar`, no un proyecto.
 
-- `importar System.IO;` y uso directo de cualquier tipo de .NET, con resolución de sobrecargas
-  y de genéricos leyendo los metadatos de los ensamblados de referencia.
+**4a, interoperabilidad (hecha, 2026-11-06):**
+
+- `importar System.IO;` y uso directo de los tipos públicos de .NET con sus nombres
+  originales: métodos estáticos y de instancia con resolución de sobrecargas y parámetros
+  opcionales, `nuevo` sobre clases y estructuras, propiedades, campos, constantes y
+  enumeraciones, lambdas hacia `Func`/`Action`, tipos de .NET en firmas y campos.
+- Traducción en la frontera: `int`/`short`/`byte`/`float`/`char` se ven como `entero`,
+  `decimal` y `texto`; cualquier valor cabe en `object`; lo demás es un tipo externo.
+- Los tipos básicos de Lince exponen también los miembros de .NET que los respaldan.
+- Los tipos se buscan por reflexión en el runtime del compilador (los `System.*` de la
+  carpeta del runtime), que es el mismo contra el que se emite.
+
+**4b, pendiente:**
+
 - Un archivo de proyecto mínimo (`lince.json`) con nombre, versión, archivos y paquetes
-  NuGet; `lince restaurar` que los descarga.
+  NuGet; `lince restaurar` que los descarga y los hace visibles a `importar`.
 - Varios archivos por programa: `modulo` e `importar` entre módulos propios.
-- Emitir contra ensamblados de referencia en vez de contra `System.Private.CoreLib` del
-  runtime del compilador, que es lo que se hace hoy; es lo que permite apuntar a un `net9.0` o
-  `net10.0` concreto y publicar.
-- `leer()` y argumentos de `principal` como primer uso real de la interoperabilidad.
+- Emitir contra ensamblados de referencia (`MetadataLoadContext`) en vez de contra el runtime
+  del compilador; es lo que permite apuntar a un `net9.0` o `net10.0` concreto y publicar.
+- Métodos genéricos de .NET, indexadores, eventos, `params`, métodos de extensión, `ref`/`out`;
+  las anotaciones de nulabilidad de .NET; las clases de Lince como argumentos tipados hacia .NET.
+- `leer()` y argumentos de `principal`.
 
 ## Fase 5: librería estándar en español
 

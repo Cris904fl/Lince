@@ -1,0 +1,37 @@
+// Interoperabilidad: tipos de .NET con sus nombres originales. System siempre está importado.
+importar System.Text;
+importar System.IO;
+importar System.Text.RegularExpressions;
+
+funcion principal() {
+    // Métodos estáticos con resolución de sobrecargas: Math.Max(long, long), Math.Sqrt(double).
+    imprimir(Math.Max(3, 7) + " " + Math.Sqrt(2.0) + " " + Math.PI.redondear());
+
+    // Un objeto de .NET: constructor, métodos encadenados y propiedad.
+    sea sb = nuevo StringBuilder();
+    sb.Append("Hola, ");
+    sb.Append("Lince");
+    sb.Append("!");
+    imprimir(sb.ToString() + " (" + sb.Length + " caracteres)");
+
+    // Estructuras de .NET y enumeraciones.
+    sea fecha = nuevo DateTime(2026, 11, 6);
+    imprimir(fecha.DayOfWeek + " " + fecha.AddDays(30).Month);
+    imprimir(fecha.DayOfWeek == DayOfWeek.Friday);
+
+    // Archivos: la librería de .NET tal cual.
+    sea ruta = Path.Combine(Path.GetTempPath(), "lince-interop.txt");
+    File.WriteAllText(ruta, "línea 1\nlínea 2");
+    imprimir(File.ReadAllText(ruta).partir("\n").cantidad);
+    File.Delete(ruta);
+    imprimir(File.Exists(ruta));
+
+    // Expresiones regulares.
+    sea patron = nuevo Regex("[0-9]+");
+    imprimir(patron.IsMatch("pedido 42") + " " + patron.Match("pedido 42").Value);
+
+    // Los tipos básicos de Lince también exponen lo que .NET les da.
+    imprimir("lince".ToUpper() + " " + "a,b,c".Split(",").Length);
+    imprimir(Environment.ProcessorCount > 0);
+    imprimir(Guid.NewGuid().ToString().longitud);
+}

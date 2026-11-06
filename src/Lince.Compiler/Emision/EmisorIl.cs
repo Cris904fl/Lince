@@ -459,6 +459,9 @@ public static class EmisorIl
         public static readonly MethodInfo EscribirLinea = Metodo(typeof(Console), nameof(Console.WriteLine), typeof(string));
         public static readonly MethodInfo EscribirLineaVacia = Metodo(typeof(Console), nameof(Console.WriteLine));
         public static readonly MethodInfo Concatenar = Metodo(typeof(string), nameof(string.Concat), typeof(string), typeof(string));
+        public static readonly MethodInfo ConcatenarObjeto = Metodo(typeof(string), nameof(string.Concat), typeof(object));
+        public static readonly MethodInfo CaracterEn = typeof(string).GetProperty("Chars")!.GetMethod!;
+        public static readonly MethodInfo CaracterATexto = Metodo(typeof(char), nameof(char.ToString), typeof(char));
         public static readonly MethodInfo TextosIguales = Metodo(typeof(string), nameof(string.Equals), typeof(string), typeof(string));
         public static readonly MethodInfo CulturaInvariante = typeof(CultureInfo).GetProperty(nameof(CultureInfo.InvariantCulture))!.GetMethod!;
         public static readonly MethodInfo EnteroATexto = Metodo(typeof(long), nameof(long.ToString), typeof(IFormatProvider));
@@ -703,6 +706,26 @@ public static class EmisorIl
                     EmitirIndice(asignacion.Objeto.Tipo, asignacion.Indice);
                     EmitirExpresion(asignacion.Valor);
                     _il.Emit(OpCodes.Callvirt, MetodoDeColeccion(asignacion.Objeto.Tipo, Colecciones.ListaEscribir, Colecciones.MapaEscribir));
+                    break;
+
+                case AsignacionExternaEnlazada asignacion:
+                    if (asignacion.Receptor is not null)
+                    {
+                        EmitirReceptorExterno(asignacion.Receptor, asignacion.Miembro.DeclaringType!);
+                    }
+
+                    if (asignacion.Miembro is PropertyInfo propiedad)
+                    {
+                        EmitirArgumentoAlLimite(asignacion.Valor, propiedad.PropertyType);
+                        EmitirLlamadaExterna(propiedad.SetMethod!, asignacion.Receptor);
+                    }
+                    else
+                    {
+                        var campo = (FieldInfo)asignacion.Miembro;
+                        EmitirArgumentoAlLimite(asignacion.Valor, campo.FieldType);
+                        _il.Emit(campo.IsStatic ? OpCodes.Stsfld : OpCodes.Stfld, campo);
+                    }
+
                     break;
 
                 case SiEnlazado si:
@@ -957,6 +980,80 @@ public static class EmisorIl
                     EmitirMiembroIntegrado(integrado);
                     break;
 
+                case TipoComoReceptorEnlazado receptor:
+                    throw new InvalidOperationException($"'{receptor.TipoExterno.Nombre}' es un tipo y no se puede emitir como valor; el enlazador debió informarlo.");
+
+                case LlamadaExternaEnlazada llamada:
+                    {
+                        if (llamada.Receptor is not null)
+                        {
+                            EmitirReceptorExterno(llamada.Receptor, llamada.Metodo.DeclaringType!);
+                        }
+
+                        var parametros = llamada.Metodo.GetParameters();
+                        for (var i = 0; i < llamada.Argumentos.Length; i++)
+                        {
+                            EmitirArgumentoAlLimite(llamada.Argumentos[i], parametros[i].ParameterType);
+                        }
+
+                        EmitirPredeterminados(parametros, llamada.Argumentos.Length);
+                        EmitirLlamadaExterna(llamada.Metodo, llamada.Receptor);
+                        AjustarResultadoDelLimite(llamada.Metodo.ReturnType, llamada.Tipo);
+                        break;
+                    }
+
+                case NuevoExternoEnlazado nuevo:
+                    if (nuevo.Constructor is null)
+                    {
+                        // Una estructura de .NET sin constructor: el valor a cero.
+                        var temporal = _il.DeclareLocal(nuevo.TipoExterno.TipoClr);
+                        _il.Emit(OpCodes.Ldloca, temporal);
+                        _il.Emit(OpCodes.Initobj, nuevo.TipoExterno.TipoClr);
+                        _il.Emit(OpCodes.Ldloc, temporal);
+                        break;
+                    }
+
+                    {
+                        var parametros = nuevo.Constructor.GetParameters();
+                        for (var i = 0; i < nuevo.Argumentos.Length; i++)
+                        {
+                            EmitirArgumentoAlLimite(nuevo.Argumentos[i], parametros[i].ParameterType);
+                        }
+
+                        EmitirPredeterminados(parametros, nuevo.Argumentos.Length);
+                        _il.Emit(OpCodes.Newobj, nuevo.Constructor);
+                        break;
+                    }
+
+                case MiembroExternoEnlazado miembro:
+                    if (miembro.Receptor is not null)
+                    {
+                        EmitirReceptorExterno(miembro.Receptor, miembro.Miembro.DeclaringType!);
+                    }
+
+                    if (miembro.Miembro is PropertyInfo propiedad)
+                    {
+                        EmitirLlamadaExterna(propiedad.GetMethod!, miembro.Receptor);
+                        AjustarResultadoDelLimite(propiedad.PropertyType, miembro.Tipo);
+                    }
+                    else
+                    {
+                        var campo = (FieldInfo)miembro.Miembro;
+                        if (campo.IsLiteral)
+                        {
+                            // Una constante (los miembros de una enumeración, Math.PI): no se lee de un campo, se emite el valor.
+                            EmitirConstante(campo.GetRawConstantValue());
+                        }
+                        else
+                        {
+                            _il.Emit(campo.IsStatic ? OpCodes.Ldsfld : OpCodes.Ldfld, campo);
+                        }
+
+                        AjustarResultadoDelLimite(campo.FieldType, miembro.Tipo);
+                    }
+
+                    break;
+
                 case LambdaEnlazada lambda:
                     // El delegado: sobre el cierre si la función tiene uno, o sobre nada (método estático).
                     if (TieneCierre)
@@ -969,7 +1066,9 @@ public static class EmisorIl
                     }
 
                     _il.Emit(OpCodes.Ldftn, _contexto!.Metodos[lambda.Simbolo]);
-                    _il.Emit(OpCodes.Newobj, _tabla.ConstructorDeDelegado(lambda.TipoFuncion));
+                    _il.Emit(OpCodes.Newobj, lambda.DelegadoClr is { } delegado
+                        ? delegado.GetConstructor([typeof(object), typeof(IntPtr)])!
+                        : _tabla.ConstructorDeDelegado(lambda.TipoFuncion));
                     break;
 
                 case ReferenciaFuncionEnlazada referencia:
@@ -1065,6 +1164,160 @@ public static class EmisorIl
             {
                 // En una estructura 'este' es un puntero: para usarlo como valor hay que leerlo.
                 _il.Emit(OpCodes.Ldobj, _tabla.Clr(tipo));
+            }
+        }
+
+        // ----- La frontera con .NET -----
+
+        /// <summary>
+        /// El receptor de un miembro de .NET: si el miembro está declarado en un tipo por valor
+        /// (DateTime, pero también Int64 cuando se llama 255.ToString("X")), hace falta su
+        /// dirección; si no, la referencia.
+        /// </summary>
+        private void EmitirReceptorExterno(ExpresionEnlazada receptor, Type declarante)
+        {
+            if (declarante.IsValueType)
+            {
+                EmitirDireccion(receptor);
+            }
+            else
+            {
+                EmitirExpresion(receptor);
+            }
+        }
+
+        /// <summary><c>call</c> para estáticos y estructuras, <c>callvirt</c> para instancias por referencia.</summary>
+        private void EmitirLlamadaExterna(MethodInfo metodo, ExpresionEnlazada? receptor)
+        {
+            var virtual_ = receptor is not null && !metodo.IsStatic && !metodo.DeclaringType!.IsValueType;
+            _il.Emit(virtual_ ? OpCodes.Callvirt : OpCodes.Call, metodo);
+        }
+
+        /// <summary>
+        /// Deja en la pila un valor de Lince como lo pide un parámetro de .NET: <c>entero</c> se
+        /// estrecha a <c>int</c> y compañía, <c>decimal</c> a <c>float</c>, y un valor se
+        /// empaqueta si el parámetro es <c>object</c> u otra referencia.
+        /// </summary>
+        private void EmitirArgumentoAlLimite(ExpresionEnlazada argumento, Type parametro)
+        {
+            EmitirExpresion(argumento);
+            var origen = argumento.Tipo.SinNulo;
+            if (ReferenceEquals(argumento.Tipo, TipoLince.Nulo))
+            {
+                return;
+            }
+
+            if (ReferenceEquals(origen, TipoLince.Entero))
+            {
+                if (parametro == typeof(int)) _il.Emit(OpCodes.Conv_I4);
+                else if (parametro == typeof(short)) _il.Emit(OpCodes.Conv_I2);
+                else if (parametro == typeof(byte)) _il.Emit(OpCodes.Conv_U1);
+                else if (parametro == typeof(sbyte)) _il.Emit(OpCodes.Conv_I1);
+                else if (parametro == typeof(ushort)) _il.Emit(OpCodes.Conv_U2);
+                else if (parametro == typeof(uint)) _il.Emit(OpCodes.Conv_U4);
+                else if (parametro == typeof(double)) _il.Emit(OpCodes.Conv_R8);
+                else if (parametro == typeof(float)) _il.Emit(OpCodes.Conv_R4);
+                else if (!parametro.IsValueType) _il.Emit(OpCodes.Box, typeof(long));
+                return;
+            }
+
+            if (ReferenceEquals(origen, TipoLince.Decimal))
+            {
+                if (parametro == typeof(float)) _il.Emit(OpCodes.Conv_R4);
+                else if (!parametro.IsValueType) _il.Emit(OpCodes.Box, typeof(double));
+                return;
+            }
+
+            if (ReferenceEquals(origen, TipoLince.Logico))
+            {
+                if (!parametro.IsValueType) _il.Emit(OpCodes.Box, typeof(bool));
+                return;
+            }
+
+            if (ReferenceEquals(origen, TipoLince.Texto) && parametro == typeof(char))
+            {
+                // Un texto de un carácter como char: el literal se emite como constante; otro texto, su primer carácter.
+                if (argumento is LiteralEnlazado { Valor: string { Length: 1 } literal })
+                {
+                    _il.Emit(OpCodes.Pop);
+                    _il.Emit(OpCodes.Ldc_I4, (int)literal[0]);
+                }
+                else
+                {
+                    _il.Emit(OpCodes.Ldc_I4_0);
+                    _il.Emit(OpCodes.Callvirt, Clr.CaracterEn);
+                }
+
+                return;
+            }
+
+            if (origen.EsEstructura && !parametro.IsValueType)
+            {
+                _il.Emit(OpCodes.Box, _tabla.Clr(origen));
+            }
+        }
+
+        /// <summary>Lo que devuelve .NET pasa al tipo de Lince: los enteros cortos a <c>entero</c> (64 bits), <c>float</c> a <c>decimal</c>.</summary>
+        private void AjustarResultadoDelLimite(Type resultado, TipoLince tipo)
+        {
+            if (ReferenceEquals(tipo, TipoLince.Entero) && resultado != typeof(long))
+            {
+                _il.Emit(resultado == typeof(uint) ? OpCodes.Conv_U8 : OpCodes.Conv_I8);
+            }
+            else if (ReferenceEquals(tipo, TipoLince.Decimal) && resultado == typeof(float))
+            {
+                _il.Emit(OpCodes.Conv_R8);
+            }
+            else if (ReferenceEquals(tipo, TipoLince.Texto) && resultado == typeof(char))
+            {
+                _il.Emit(OpCodes.Call, Clr.CaracterATexto);
+            }
+        }
+
+        /// <summary>Los parámetros opcionales que la llamada no dio: su valor por defecto, como haría C#.</summary>
+        private void EmitirPredeterminados(ParameterInfo[] parametros, int desde)
+        {
+            for (var i = desde; i < parametros.Length; i++)
+            {
+                var parametro = parametros[i];
+                var valor = parametro.DefaultValue;
+                if (valor is Enum enumeracion)
+                {
+                    valor = Convert.ChangeType(enumeracion, Enum.GetUnderlyingType(enumeracion.GetType()), CultureInfo.InvariantCulture);
+                }
+
+                if (valor is null && parametro.ParameterType.IsValueType)
+                {
+                    var temporal = _il.DeclareLocal(parametro.ParameterType);
+                    _il.Emit(OpCodes.Ldloca, temporal);
+                    _il.Emit(OpCodes.Initobj, parametro.ParameterType);
+                    _il.Emit(OpCodes.Ldloc, temporal);
+                    continue;
+                }
+
+                EmitirConstante(valor);
+            }
+        }
+
+        private void EmitirConstante(object? valor)
+        {
+            switch (valor)
+            {
+                case int i: _il.Emit(OpCodes.Ldc_I4, i); break;
+                case long l: _il.Emit(OpCodes.Ldc_I8, l); break;
+                case short s: _il.Emit(OpCodes.Ldc_I4, (int)s); break;
+                case byte b: _il.Emit(OpCodes.Ldc_I4, (int)b); break;
+                case sbyte sb: _il.Emit(OpCodes.Ldc_I4, (int)sb); break;
+                case ushort us: _il.Emit(OpCodes.Ldc_I4, (int)us); break;
+                case uint ui: _il.Emit(OpCodes.Ldc_I4, unchecked((int)ui)); break;
+                case ulong ul: _il.Emit(OpCodes.Ldc_I8, unchecked((long)ul)); break;
+                case double d: _il.Emit(OpCodes.Ldc_R8, d); break;
+                case float f: _il.Emit(OpCodes.Ldc_R4, f); break;
+                case bool b: _il.Emit(b ? OpCodes.Ldc_I4_1 : OpCodes.Ldc_I4_0); break;
+                case char c: _il.Emit(OpCodes.Ldc_I4, (int)c); break;
+                case string s: _il.Emit(OpCodes.Ldstr, s); break;
+                case null: _il.Emit(OpCodes.Ldnull); break;
+                default: throw new InvalidOperationException($"Constante de .NET no contemplada: {valor.GetType().Name}");
             }
         }
 
@@ -1345,6 +1598,30 @@ public static class EmisorIl
             if (ReferenceEquals(origen.SinNulo, destino.SinNulo))
             {
                 // T → T? y T? → T (donde el flujo lo permitió): en .NET son el mismo tipo.
+                return;
+            }
+
+            if (destino.SinNulo is TipoExterno externo)
+            {
+                // Hacia object o una base de .NET: los valores se empaquetan, las referencias van tal cual.
+                if (!externo.EsValor && (origen.SinNulo.EsEstructura || ReferenceEquals(origen, TipoLince.Entero)
+                    || ReferenceEquals(origen, TipoLince.Decimal) || ReferenceEquals(origen, TipoLince.Logico)))
+                {
+                    _il.Emit(OpCodes.Box, _tabla.Clr(origen));
+                }
+
+                return;
+            }
+
+            if (destino.EsTextual && origen.SinNulo is TipoExterno origenExterno)
+            {
+                // Un valor de .NET se escribe con su ToString; string.Concat(object) tolera nulo.
+                if (origenExterno.EsValor)
+                {
+                    _il.Emit(OpCodes.Box, origenExterno.TipoClr);
+                }
+
+                _il.Emit(OpCodes.Call, Clr.ConcatenarObjeto);
                 return;
             }
 

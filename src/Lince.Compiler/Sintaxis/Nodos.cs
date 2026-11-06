@@ -21,6 +21,8 @@ public sealed record ProgramaSintaxis(ArchivoFuente Archivo, ImmutableArray<Decl
 
     public ImmutableArray<TipoDeclaradoSintaxis> Tipos => [.. Declaraciones.OfType<TipoDeclaradoSintaxis>()];
 
+    public ImmutableArray<ImportarSintaxis> Importaciones => [.. Declaraciones.OfType<ImportarSintaxis>()];
+
     public override Ubicacion Ubicacion => Declaraciones.Length == 0
         ? FinDeArchivo.Ubicacion
         : Ubicacion.Entre(Declaraciones[0].Ubicacion, FinDeArchivo.Ubicacion);
@@ -28,6 +30,14 @@ public sealed record ProgramaSintaxis(ArchivoFuente Archivo, ImmutableArray<Decl
 
 /// <summary>Una función, un tipo o un campo: lo que puede aparecer en el nivel superior o dentro de un tipo.</summary>
 public abstract record DeclaracionSintaxis : NodoSintaxis;
+
+/// <summary><c>importar System.Text;</c>: un espacio de nombres de .NET cuyos tipos se pueden nombrar a secas.</summary>
+public sealed record ImportarSintaxis(Token PalabraImportar, ImmutableArray<Token> Partes, Token PuntoYComa) : DeclaracionSintaxis
+{
+    public string Espacio => string.Join(".", Partes.Select(p => p.Texto));
+
+    public override Ubicacion Ubicacion => Ubicacion.Entre(PalabraImportar.Ubicacion, PuntoYComa.Ubicacion);
+}
 
 /// <summary>
 /// Una función libre o un método. <see cref="Modificador"/> es <c>privado</c> o <c>publico</c>

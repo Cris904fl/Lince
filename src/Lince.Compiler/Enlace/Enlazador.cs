@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Reflection;
 using Lince.Compiler.Diagnosticos;
 using Lince.Compiler.Sintaxis;
 using Lince.Compiler.Texto;
@@ -21,6 +22,9 @@ public sealed class Enlazador
     private readonly BolsaDiagnosticos _diagnosticos;
     private readonly Dictionary<string, SimboloFuncion> _funciones = new(StringComparer.Ordinal);
     private readonly Dictionary<string, TipoUsuario> _tipos = new(StringComparer.Ordinal);
+
+    /// <summary>Espacios de nombres de .NET donde se buscan los tipos nombrados a secas; <c>System</c> siempre está.</summary>
+    private readonly List<string> _espacios = ["System"];
     private Ambito _ambito = new(null);
     private SimboloFuncion? _funcionActual;
     private TipoUsuario? _tipoActual;
@@ -56,6 +60,28 @@ public sealed class Enlazador
 
     private ProgramaEnlazado EnlazarPrograma(ProgramaSintaxis programa)
     {
+        // Pasada 0: los espacios de nombres importados de .NET.
+        foreach (var importacion in programa.Importaciones)
+        {
+            if (importacion.Partes.Any(p => p.EsFaltante))
+            {
+                continue;
+            }
+
+            var espacio = importacion.Espacio;
+            if (!Externos.ExisteEspacio(espacio))
+            {
+                _diagnosticos.Error(Codigos.EspacioNoExiste, importacion.Ubicacion,
+                    $"no se encontró el espacio de nombres '{espacio}' en .NET; revise la mayúscula inicial de cada parte (System.Text, System.IO)");
+                continue;
+            }
+
+            if (!_espacios.Contains(espacio))
+            {
+                _espacios.Add(espacio);
+            }
+        }
+
         // Pasada 1: nombres de tipos, para que los campos y las firmas puedan referirse a ellos.
         foreach (var tipo in programa.Tipos)
         {
@@ -330,7 +356,14 @@ public sealed class Enlazador
                 return usuario;
             }
 
-            _diagnosticos.Error(Codigos.TipoNoExiste, tipo.Palabra.Ubicacion, $"no existe un tipo llamado '{tipo.Palabra.Texto}'");
+            // Un tipo de .NET de los espacios importados, visto como lo ve Lince.
+            if (Externos.BuscarTipo(tipo.Palabra.Texto, _espacios) is { } externo)
+            {
+                return Externos.ALince(externo) ?? TipoLince.Externo(externo);
+            }
+
+            _diagnosticos.Error(Codigos.TipoNoExiste, tipo.Palabra.Ubicacion,
+                $"no existe un tipo llamado '{tipo.Palabra.Texto}' (ni en el programa ni en los espacios de .NET importados)");
             return TipoLince.Error;
         }
 
@@ -602,6 +635,16 @@ public sealed class Enlazador
         return enlazada;
     }
 
+    /// <summary>La lista de lambdas del cuerpo guarda la versión que emitirá el emisor; si una cambia, se sustituye.</summary>
+    private void ReemplazarLambda(LambdaEnlazada anterior, LambdaEnlazada nueva)
+    {
+        var indice = _lambdas.FindIndex(l => ReferenceEquals(l, anterior));
+        if (indice >= 0)
+        {
+            _lambdas[indice] = nueva;
+        }
+    }
+
     /// <summary>Si el bloque tiene algún 'regresar valor' propio (sin entrar en lambdas anidadas, que son expresiones).</summary>
     private static bool ContieneRegresarConValor(SentenciaSintaxis sentencia) => sentencia switch
     {
@@ -617,7 +660,7 @@ public sealed class Enlazador
     private ExpresionSentenciaEnlazada ComoSentencia(ExpresionEnlazada expresion, ExpresionSintaxis sintaxis)
     {
         if (expresion is not (LlamadaEnlazada or LlamadaMetodoEnlazada or ImprimirEnlazado or NuevoEnlazado or ErrorEnlazado
-            or InvocacionEnlazada or MiembroIntegradoEnlazado { Miembro.EsPropiedad: false }))
+            or InvocacionEnlazada or LlamadaExternaEnlazada or NuevoExternoEnlazado or MiembroIntegradoEnlazado { Miembro.EsPropiedad: false }))
         {
             _diagnosticos.Error(Codigos.ExpresionSinEfecto, sintaxis.Ubicacion,
                 "esta expresión no tiene efecto; una lambda que regresa nada debe hacer algo (una llamada)");
@@ -919,8 +962,18 @@ public sealed class Enlazador
             return TipoLince.Error;
         }
 
+        if (valor is TipoComoReceptorEnlazado receptor)
+        {
+            InformarTipoComoValor(receptor, ubicacion);
+            return TipoLince.Error;
+        }
+
         return valor.Tipo;
     }
+
+    private void InformarTipoComoValor(TipoComoReceptorEnlazado receptor, Ubicacion ubicacion) =>
+        _diagnosticos.Error(Codigos.TipoComoValor, ubicacion,
+            $"'{receptor.TipoExterno.Nombre}' es un tipo de .NET, no un valor; use uno de sus miembros ({receptor.TipoExterno.Nombre}.algo) o créelo con nuevo");
 
     private void DeclararVariable(SimboloVariable variable, Token nombre)
     {
@@ -985,6 +1038,12 @@ public sealed class Enlazador
                         $"'{miembro.Nombre.Texto}' de '{objeto.Tipo}' es de solo lectura");
                     EnlazarExpresion(asignacion.Valor);
                     return new ExpresionSentenciaEnlazada(new ErrorEnlazado());
+                }
+
+                // Una propiedad o campo de .NET: objeto.Propiedad = valor; Tipo.Campo = valor;
+                if (objeto is TipoComoReceptorEnlazado || objeto.Tipo.EsExterno)
+                {
+                    return EnlazarAsignacionExterna(objeto, miembro, asignacion);
                 }
 
                 campo = BuscarCampoDe(objeto, miembro.Nombre, miembro.Objeto);
@@ -1294,7 +1353,7 @@ public sealed class Enlazador
     {
         var expresion = EnlazarExpresion(sentencia.Expresion);
         if (expresion is not (LlamadaEnlazada or LlamadaMetodoEnlazada or ImprimirEnlazado or NuevoEnlazado or ErrorEnlazado
-            or InvocacionEnlazada or MiembroIntegradoEnlazado { Miembro.EsPropiedad: false }))
+            or InvocacionEnlazada or LlamadaExternaEnlazada or NuevoExternoEnlazado or MiembroIntegradoEnlazado { Miembro.EsPropiedad: false }))
         {
             _diagnosticos.Error(Codigos.ExpresionSinEfecto, sentencia.Expresion.Ubicacion,
                 "esta expresión no tiene efecto; solo una llamada a función puede ir sola como sentencia");
@@ -1374,6 +1433,12 @@ public sealed class Enlazador
         if (_funciones.TryGetValue(nombre.Identificador.Texto, out var funcion))
         {
             return new ReferenciaFuncionEnlazada(funcion, TipoDe(funcion));
+        }
+
+        // Un tipo de .NET por su nombre: solo sirve como receptor de sus miembros estáticos.
+        if (!_tipos.ContainsKey(nombre.Identificador.Texto) && Externos.BuscarTipo(nombre.Identificador.Texto, _espacios) is { } externo)
+        {
+            return new TipoComoReceptorEnlazado(TipoLince.Externo(externo));
         }
 
         BuscarVariable(nombre.Identificador);
@@ -1592,7 +1657,9 @@ public sealed class Enlazador
         }
     }
 
-    private static bool EsReferenciaComparable(TipoLince tipo) => tipo is TipoUsuario { EsEstructura: false } or TipoGenerico;
+    /// <summary>Lo que se compara por identidad con ==: clases, colecciones y, de .NET, las referencias y las enumeraciones.</summary>
+    private static bool EsReferenciaComparable(TipoLince tipo) =>
+        tipo is TipoUsuario { EsEstructura: false } or TipoGenerico or TipoExterno { EsValor: false } or TipoExterno { EsEnumeracion: true };
 
     private static TipoLince TipoNumericoComun(TipoLince a, TipoLince b) =>
         ReferenceEquals(a, TipoLince.Decimal) || ReferenceEquals(b, TipoLince.Decimal) ? TipoLince.Decimal : TipoLince.Entero;
@@ -1730,6 +1797,11 @@ public sealed class Enlazador
             EnlazarArgumentos(llamada);
             InformarMiembroDeNulable(objeto, miembro.Objeto);
             return new ErrorEnlazado();
+        }
+
+        if (objeto is TipoComoReceptorEnlazado || objeto.Tipo.EsExterno)
+        {
+            return EnlazarLlamadaExterna(objeto, miembro.Nombre, llamada);
         }
 
         if (objeto.Tipo is not TipoUsuario tipo)
@@ -1883,7 +1955,17 @@ public sealed class Enlazador
     private ExpresionEnlazada EnlazarMiembro(MiembroSintaxis miembro)
     {
         var objeto = EnlazarExpresion(miembro.Objeto);
-        if (objeto.Tipo is not TipoUsuario && !objeto.Tipo.EsError && !objeto.Tipo.EsNulable && !miembro.Nombre.EsFaltante)
+        if (miembro.Nombre.EsFaltante || objeto.Tipo.EsError)
+        {
+            return new ErrorEnlazado();
+        }
+
+        if (objeto is TipoComoReceptorEnlazado || objeto.Tipo.EsExterno)
+        {
+            return objeto.Tipo.EsNulable ? InformarYDescartar(objeto, miembro.Objeto) : EnlazarMiembroExterno(objeto, miembro.Nombre);
+        }
+
+        if (objeto.Tipo is not TipoUsuario && !objeto.Tipo.EsNulable)
         {
             return EnlazarPropiedadIntegrada(objeto, miembro.Nombre);
         }
@@ -1892,13 +1974,338 @@ public sealed class Enlazador
         return campo is null ? new ErrorEnlazado() : AplicarNoNulo(new CampoEnlazado(objeto, campo));
     }
 
+    private ErrorEnlazado InformarYDescartar(ExpresionEnlazada objeto, ExpresionSintaxis sintaxis)
+    {
+        InformarMiembroDeNulable(objeto, sintaxis);
+        return new ErrorEnlazado();
+    }
+
+    // ----- Interoperabilidad con .NET -----
+
+    private const BindingFlags MiembrosPublicos = BindingFlags.Public | BindingFlags.FlattenHierarchy;
+
+    /// <summary>El tipo de .NET sobre el que se buscan miembros, y si se buscan los estáticos (receptor es un nombre de tipo) o los de instancia.</summary>
+    private static (Type Clr, bool Estatico)? ReceptorExterno(ExpresionEnlazada objeto) => objeto switch
+    {
+        TipoComoReceptorEnlazado receptor => (receptor.TipoExterno.TipoClr, true),
+        { Tipo.SinNulo: TipoExterno externo } => (externo.TipoClr, false),
+        _ => Externos.ClrDe(objeto.Tipo.SinNulo) is { } clr ? (clr, false) : null,
+    };
+
+    private ExpresionEnlazada EnlazarMiembroExterno(ExpresionEnlazada objeto, Token nombre)
+    {
+        var (clr, estatico) = ReceptorExterno(objeto)!.Value;
+        var miembro = BuscarPropiedadOCampo(clr, nombre.Texto, estatico);
+        if (miembro is null)
+        {
+            if (clr.GetMethods(MiembrosPublicos | (estatico ? BindingFlags.Static : BindingFlags.Instance)).Any(m => m.Name == nombre.Texto))
+            {
+                _diagnosticos.Error(Codigos.NombreNoEsVariable, nombre.Ubicacion,
+                    $"'{nombre.Texto}' es un método de '{clr.Name}'; para llamarlo escriba .{nombre.Texto}(...)");
+            }
+            else
+            {
+                InformarMiembroExternoInexistente(clr, nombre, estatico);
+            }
+
+            return new ErrorEnlazado();
+        }
+
+        var tipoClr = miembro is PropertyInfo propiedad ? propiedad.PropertyType : ((FieldInfo)miembro).FieldType;
+        var tipo = Externos.ALince(tipoClr);
+        if (tipo is null)
+        {
+            _diagnosticos.Error(Codigos.MiembroExternoNoAdmitido, nombre.Ubicacion,
+                $"'{clr.Name}.{nombre.Texto}' es de tipo '{tipoClr.Name}', que Lince no puede usar en esta versión");
+            return new ErrorEnlazado();
+        }
+
+        return new MiembroExternoEnlazado(estatico ? null : objeto, miembro, tipo);
+    }
+
+    private static MemberInfo? BuscarPropiedadOCampo(Type clr, string nombre, bool estatico)
+    {
+        var banderas = MiembrosPublicos | (estatico ? BindingFlags.Static : BindingFlags.Instance);
+        var propiedad = clr.GetProperty(nombre, banderas);
+        if (propiedad is not null && propiedad.GetIndexParameters().Length == 0 && propiedad.GetMethod is { IsPublic: true })
+        {
+            return propiedad;
+        }
+
+        return clr.GetField(nombre, banderas);
+    }
+
+    private void InformarMiembroExternoInexistente(Type clr, Token nombre, bool estatico)
+    {
+        var banderas = MiembrosPublicos | (estatico ? BindingFlags.Static : BindingFlags.Instance);
+        var parecidos = clr.GetMembers(banderas)
+            .Where(m => m is MethodInfo { IsSpecialName: false } or PropertyInfo or FieldInfo)
+            .Select(m => m.Name)
+            .Distinct()
+            .Where(n => n.StartsWith(nombre.Texto[..Math.Min(2, nombre.Texto.Length)], StringComparison.OrdinalIgnoreCase))
+            .Take(6)
+            .ToList();
+        var pista = parecidos.Count == 0 ? "" : $"; ¿quiso decir {string.Join(", ", parecidos)}?";
+        var que = estatico ? "miembro estático" : "miembro";
+        _diagnosticos.Error(Codigos.MiembroExternoNoExiste, nombre.Ubicacion,
+            $"el tipo de .NET '{clr.Name}' no tiene un {que} público llamado '{nombre.Texto}' (los nombres de .NET distinguen mayúsculas){pista}");
+    }
+
+    private SentenciaEnlazada EnlazarAsignacionExterna(ExpresionEnlazada objeto, MiembroSintaxis miembro, AsignacionSintaxis asignacion)
+    {
+        if (objeto.Tipo.EsNulable)
+        {
+            EnlazarExpresion(asignacion.Valor);
+            return new ExpresionSentenciaEnlazada(InformarYDescartar(objeto, miembro.Objeto));
+        }
+
+        var (clr, estatico) = ReceptorExterno(objeto)!.Value;
+        var destino = BuscarPropiedadOCampo(clr, miembro.Nombre.Texto, estatico);
+        var tipoClr = destino switch
+        {
+            PropertyInfo { SetMethod.IsPublic: true } propiedad => propiedad.PropertyType,
+            FieldInfo { IsInitOnly: false, IsLiteral: false } campo => campo.FieldType,
+            _ => null,
+        };
+
+        if (destino is null || tipoClr is null)
+        {
+            EnlazarExpresion(asignacion.Valor);
+            if (destino is null)
+            {
+                InformarMiembroExternoInexistente(clr, miembro.Nombre, estatico);
+            }
+            else
+            {
+                _diagnosticos.Error(Codigos.MiembroDeSoloLectura, miembro.Nombre.Ubicacion,
+                    $"'{clr.Name}.{miembro.Nombre.Texto}' es de solo lectura en .NET");
+            }
+
+            return new ExpresionSentenciaEnlazada(new ErrorEnlazado());
+        }
+
+        var tipo = Externos.ALince(tipoClr);
+        if (tipo is null)
+        {
+            EnlazarExpresion(asignacion.Valor);
+            _diagnosticos.Error(Codigos.MiembroExternoNoAdmitido, miembro.Nombre.Ubicacion,
+                $"'{clr.Name}.{miembro.Nombre.Texto}' es de tipo '{tipoClr.Name}', que Lince no puede usar en esta versión");
+            return new ExpresionSentenciaEnlazada(new ErrorEnlazado());
+        }
+
+        var valor = EnlazarExpresion(asignacion.Valor, tipo);
+        if (asignacion.Operador.Tipo != TipoToken.Igual)
+        {
+            var operador = asignacion.Operador.Tipo switch
+            {
+                TipoToken.MasIgual => TipoToken.Mas,
+                TipoToken.MenosIgual => TipoToken.Menos,
+                TipoToken.AsteriscoIgual => TipoToken.Asterisco,
+                TipoToken.BarraIgual => TipoToken.Barra,
+                _ => TipoToken.Porcentaje,
+            };
+            valor = EnlazarBinaria(new MiembroExternoEnlazado(estatico ? null : objeto, destino, tipo), operador, valor, asignacion.Operador.Ubicacion);
+        }
+
+        valor = Convertir(valor, tipo, asignacion.Valor.Ubicacion,
+            origen => $"no se puede asignar un valor de tipo '{origen}' a '{clr.Name}.{miembro.Nombre.Texto}', que es de tipo '{tipo}'");
+        if (valor.Tipo.EsError)
+        {
+            return new ExpresionSentenciaEnlazada(new ErrorEnlazado());
+        }
+
+        ComprobarObjetivoDeEstructura(objeto, miembro.Objeto.Ubicacion);
+        return new AsignacionExternaEnlazada(estatico ? null : objeto, destino, valor);
+    }
+
+    /// <summary>Llamada a un método de .NET, estático (<c>Math.Sqrt(x)</c>) o de instancia (<c>sb.Append(x)</c>), eligiendo la sobrecarga.</summary>
+    private ExpresionEnlazada EnlazarLlamadaExterna(ExpresionEnlazada objeto, Token nombre, LlamadaSintaxis llamada)
+    {
+        var (clr, estatico) = ReceptorExterno(objeto)!.Value;
+        var banderas = MiembrosPublicos | (estatico ? BindingFlags.Static : BindingFlags.Instance);
+        var candidatos = clr.GetMethods(banderas)
+            .Where(m => m.Name == nombre.Texto && !m.IsGenericMethodDefinition && !m.ContainsGenericParameters)
+            .Cast<MethodBase>()
+            .ToList();
+
+        if (candidatos.Count == 0)
+        {
+            if (BuscarPropiedadOCampo(clr, nombre.Texto, estatico) is not null)
+            {
+                _diagnosticos.Error(Codigos.NombreNoEsVariable, nombre.Ubicacion,
+                    $"'{clr.Name}.{nombre.Texto}' es una propiedad o un campo, no un método; se lee sin paréntesis");
+            }
+            else
+            {
+                InformarMiembroExternoInexistente(clr, nombre, estatico);
+            }
+
+            return Descartar(llamada);
+        }
+
+        var eleccion = ResolverSobrecarga(candidatos, llamada.Argumentos, $"{clr.Name}.{nombre.Texto}", llamada.Ubicacion);
+        if (eleccion is null)
+        {
+            return new ErrorEnlazado();
+        }
+
+        var (metodo, argumentos) = eleccion.Value;
+        var retorno = Externos.ALince(((MethodInfo)metodo).ReturnType);
+        if (retorno is null)
+        {
+            _diagnosticos.Error(Codigos.MiembroExternoNoAdmitido, nombre.Ubicacion,
+                $"'{clr.Name}.{nombre.Texto}' regresa '{((MethodInfo)metodo).ReturnType.Name}', que Lince no puede usar en esta versión");
+            return new ErrorEnlazado();
+        }
+
+        return new LlamadaExternaEnlazada(estatico ? null : objeto, (MethodInfo)metodo, argumentos, retorno);
+    }
+
+    /// <summary>
+    /// Elige entre las sobrecargas de .NET la que mejor encaja con los argumentos. Los
+    /// argumentos que no son lambdas se enlazan primero; las lambdas se enlazan con el tipo
+    /// del parámetro de la sobrecarga candidata. Si varias encajan igual de bien, gana la
+    /// primera que declara .NET.
+    /// </summary>
+    private (MethodBase Metodo, ImmutableArray<ExpresionEnlazada> Argumentos)? ResolverSobrecarga(
+        List<MethodBase> candidatos, ImmutableArray<ExpresionSintaxis> sintaxis, string nombre, Ubicacion ubicacion)
+    {
+        var fijos = new ExpresionEnlazada?[sintaxis.Length];
+        for (var i = 0; i < sintaxis.Length; i++)
+        {
+            if (sintaxis[i] is not LambdaSintaxis)
+            {
+                fijos[i] = EnlazarExpresion(sintaxis[i]);
+                if (fijos[i] is TipoComoReceptorEnlazado receptor)
+                {
+                    InformarTipoComoValor(receptor, sintaxis[i].Ubicacion);
+                    return null;
+                }
+            }
+        }
+
+        if (fijos.Any(f => f?.Tipo.EsError == true))
+        {
+            return null;
+        }
+
+        MethodBase? mejor = null;
+        var mejorPuntaje = int.MinValue;
+        foreach (var candidato in candidatos)
+        {
+            // Caben los que tienen tantos parámetros como argumentos, o más si los que sobran son opcionales.
+            var parametros = candidato.GetParameters();
+            if (parametros.Length < sintaxis.Length
+                || parametros.Skip(sintaxis.Length).Any(p => !p.HasDefaultValue)
+                || parametros.Any(p => p.ParameterType.IsByRef || p.ParameterType.IsPointer || Externos.ALince(p.ParameterType) is null))
+            {
+                continue;
+            }
+
+            // Usar parámetros opcionales cuesta un poco, para que gane la sobrecarga exacta.
+            var puntaje = sintaxis.Length - parametros.Length;
+            var encaja = true;
+            for (var i = 0; i < sintaxis.Length && encaja; i++)
+            {
+                if (fijos[i] is { } fijo)
+                {
+                    var compatibilidad = Externos.Compatibilidad(fijo.Tipo, parametros[i].ParameterType, Externos.ClrDe);
+                    encaja = compatibilidad is not null;
+                    puntaje += compatibilidad ?? 0;
+                }
+                else
+                {
+                    // Una lambda encaja en un delegado con la misma cantidad de parámetros.
+                    var funcion = Externos.ComoFuncion(parametros[i].ParameterType);
+                    encaja = funcion is not null && funcion.Parametros.Length == ((LambdaSintaxis)sintaxis[i]).Parametros.Length;
+                    puntaje += 3;
+                }
+            }
+
+            if (encaja && puntaje > mejorPuntaje)
+            {
+                mejor = candidato;
+                mejorPuntaje = puntaje;
+            }
+        }
+
+        if (mejor is null)
+        {
+            var tipos = string.Join(", ", fijos.Select((f, i) => f?.Tipo.Nombre ?? "lambda"));
+            var firmas = candidatos.Take(5).Select(c => $"{nombre}({string.Join(", ", c.GetParameters().Select(p => p.ParameterType.Name))})");
+            _diagnosticos.Error(Codigos.SobrecargaNoEncontrada, ubicacion,
+                $"ninguna versión de '{nombre}' acepta ({tipos}); las que hay: {string.Join("; ", firmas)}{(candidatos.Count > 5 ? "; ..." : "")}");
+            return null;
+        }
+
+        var elegidos = mejor.GetParameters();
+        var argumentos = ImmutableArray.CreateBuilder<ExpresionEnlazada>(sintaxis.Length);
+        for (var i = 0; i < sintaxis.Length; i++)
+        {
+            var argumento = fijos[i] ?? EnlazarExpresion(sintaxis[i], Externos.ComoFuncion(elegidos[i].ParameterType));
+            if (argumento.Tipo.EsError)
+            {
+                return null;
+            }
+
+            // Una lambda hacia Predicate<T> o similar se construye con ese delegado, no con Func.
+            if (argumento is LambdaEnlazada lambda && Externos.DelegadoExacto(elegidos[i].ParameterType) is { } delegado)
+            {
+                argumento = lambda with { DelegadoClr = delegado };
+                ReemplazarLambda(lambda, (LambdaEnlazada)argumento);
+            }
+
+            argumentos.Add(argumento);
+        }
+
+        return (mejor, argumentos.MoveToImmutable());
+    }
+
+    private ExpresionEnlazada EnlazarNuevoExterno(TipoExterno tipo, NuevoSintaxis nuevo)
+    {
+        var candidatos = tipo.TipoClr.GetConstructors(BindingFlags.Public | BindingFlags.Instance).Cast<MethodBase>().ToList();
+        if (tipo.TipoClr.IsAbstract || candidatos.Count == 0 && !tipo.EsValor)
+        {
+            EnlazarArgumentos(nuevo.Argumentos);
+            _diagnosticos.Error(Codigos.NuevoDeTipoBasico, nuevo.Tipo.Ubicacion,
+                $"'{tipo.Nombre}' no se puede crear con 'nuevo': es un tipo estático o abstracto de .NET");
+            return new ErrorEnlazado();
+        }
+
+        if (candidatos.Count == 0)
+        {
+            // Una estructura de .NET sin constructor público: solo la forma vacía.
+            if (nuevo.Argumentos.Length > 0)
+            {
+                EnlazarArgumentos(nuevo.Argumentos);
+                _diagnosticos.Error(Codigos.SobrecargaNoEncontrada, nuevo.Ubicacion, $"'{tipo.Nombre}' solo se puede crear sin argumentos");
+                return new ErrorEnlazado();
+            }
+
+            return new NuevoExternoEnlazado(null!, [], tipo);
+        }
+
+        var eleccion = ResolverSobrecarga(candidatos, nuevo.Argumentos, $"nuevo {tipo.Nombre}", nuevo.Ubicacion);
+        return eleccion is null ? new ErrorEnlazado() : new NuevoExternoEnlazado((ConstructorInfo)eleccion.Value.Metodo, eleccion.Value.Argumentos, tipo);
+    }
+
     // ----- Tipos integrados: texto, números, lista y mapa -----
+
+    /// <summary>Si el tipo de .NET detrás de un tipo básico de Lince tiene un miembro público con ese nombre (con sus mayúsculas).</summary>
+    private static bool TieneMiembroEnDotnet(ExpresionEnlazada objeto, string nombre) =>
+        Externos.ClrDe(objeto.Tipo.SinNulo) is { } clr
+        && clr.GetMember(nombre, BindingFlags.Public | BindingFlags.Instance | BindingFlags.FlattenHierarchy).Length > 0;
 
     private ExpresionEnlazada EnlazarPropiedadIntegrada(ExpresionEnlazada objeto, Token nombre)
     {
         var miembro = Integrados.Buscar(objeto.Tipo, nombre.Texto);
         if (miembro is null)
         {
+            if (TieneMiembroEnDotnet(objeto, nombre.Texto))
+            {
+                return EnlazarMiembroExterno(objeto, nombre);
+            }
+
             InformarMiembroIntegradoInexistente(objeto.Tipo, nombre);
             return new ErrorEnlazado();
         }
@@ -1923,6 +2330,12 @@ public sealed class Enlazador
         var miembro = Integrados.Buscar(objeto.Tipo, nombre.Texto);
         if (miembro is null)
         {
+            // Si el tipo básico tiene ese método en .NET (texto.ToUpper(), lista.Sort()), se usa tal cual.
+            if (TieneMiembroEnDotnet(objeto, nombre.Texto))
+            {
+                return EnlazarLlamadaExterna(objeto, nombre, llamada);
+            }
+
             InformarMiembroIntegradoInexistente(objeto.Tipo, nombre);
             return Descartar(llamada);
         }
@@ -2258,6 +2671,9 @@ public sealed class Enlazador
                 var convertidos = EnlazarYConvertirArgumentos($"nuevo {usuario.Nombre}", usuario.ParametrosDeNuevo, nuevo.Argumentos, nuevo.Ubicacion);
                 return convertidos is null ? new ErrorEnlazado() : new NuevoEnlazado(usuario, convertidos.Value);
 
+            case TipoExterno externo:
+                return EnlazarNuevoExterno(externo, nuevo);
+
             case { EsError: true }:
                 EnlazarArgumentos(nuevo.Argumentos);
                 return new ErrorEnlazado();
@@ -2316,6 +2732,22 @@ public sealed class Enlazador
             _diagnosticos.Error(Codigos.PuedeSerNulo, ubicacion,
                 $"{que} es de tipo '{origen}' y puede ser nulo, y aquí se necesita '{destino}'; compruébelo antes con si ... != nulo");
             return new ErrorEnlazado();
+        }
+
+        if (ReferenceEquals(origen, TipoLince.NombreDeTipo))
+        {
+            InformarTipoComoValor((TipoComoReceptorEnlazado)expresion, ubicacion);
+            return new ErrorEnlazado();
+        }
+
+        // Hacia un tipo de .NET: cualquier valor cabe en object (empaquetado), y un tipo de .NET en sus bases e interfaces.
+        if (destino.SinNulo is TipoExterno destinoExterno && !ReferenceEquals(origen, TipoLince.Nada))
+        {
+            var clrOrigen = Externos.ClrDe(origen.SinNulo);
+            if (destinoExterno.TipoClr == typeof(object) || (clrOrigen is not null && destinoExterno.TipoClr.IsAssignableFrom(clrOrigen)))
+            {
+                return new ConversionEnlazada(expresion, destino);
+            }
         }
 
         _diagnosticos.Error(codigo, ubicacion, mensaje(origen));

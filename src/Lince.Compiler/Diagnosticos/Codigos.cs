@@ -75,6 +75,11 @@ public static class Codigos
     public const string ParametrosDeLambda = "LN3053";
     public const string ClaveNoComparable = "LN3054";
     public const string LambdaEnCampo = "LN3055";
+    public const string EspacioNoExiste = "LN3060";
+    public const string TipoComoValor = "LN3061";
+    public const string MiembroExternoNoExiste = "LN3062";
+    public const string SobrecargaNoEncontrada = "LN3063";
+    public const string MiembroExternoNoAdmitido = "LN3064";
 
     // Emisión y herramienta
     public const string ErrorDeEmision = "LN4001";

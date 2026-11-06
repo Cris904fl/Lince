@@ -35,7 +35,10 @@ puede ser `nulo` y solo se usa como `Nodo` tras comprobarlo
 `mapa<K, V>` con literales, índices, `para x en coleccion` y métodos de texto y números sobre
 las clases de .NET ([ejemplos/inventario.ln](ejemplos/inventario.ln)); y lambdas con
 clausuras, tipos función y `filtrar`, `transformar`, `ordenarPor` o `reducir` sobre las
-listas ([ejemplos/empleados.ln](ejemplos/empleados.ln)). La referencia completa del lenguaje está en
+listas ([ejemplos/empleados.ln](ejemplos/empleados.ln)). Y con `importar System.IO;` se usa
+cualquier tipo de .NET con su nombre original: `Math.Sqrt`, `nuevo StringBuilder()`,
+`File.ReadAllText`, `DateTime`, `Regex` ([ejemplos/interop.ln](ejemplos/interop.ln)).
+La referencia completa del lenguaje está en
 [docs/especificacion.md](docs/especificacion.md) y lo que viene, en
 [docs/hoja-de-ruta.md](docs/hoja-de-ruta.md).
 

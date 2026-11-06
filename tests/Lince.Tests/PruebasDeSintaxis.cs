@@ -143,9 +143,9 @@ public class PruebasDeSintaxis
     [Fact]
     public void Una_palabra_reservada_da_LN2004()
     {
-        var arbol = ArbolSintaxis.Analizar("funcion f() { importar x = 1; }");
+        var arbol = ArbolSintaxis.Analizar("funcion f() { modulo x = 1; }");
 
-        Assert.Contains(arbol.Diagnosticos, d => d.Codigo == Codigos.PalabraReservada && d.Mensaje.Contains("'importar'"));
+        Assert.Contains(arbol.Diagnosticos, d => d.Codigo == Codigos.PalabraReservada && d.Mensaje.Contains("'modulo'"));
     }
 
     [Fact]

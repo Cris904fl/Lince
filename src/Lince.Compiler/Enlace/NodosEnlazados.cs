@@ -152,7 +152,8 @@ public sealed record MiembroIntegradoEnlazado(ExpresionEnlazada Objeto, MiembroI
 }
 
 /// <summary>Una lambda ya enlazada: su firma como símbolo, su cuerpo (siempre un bloque) y su tipo función.</summary>
-public sealed record LambdaEnlazada(SimboloFuncion Simbolo, BloqueEnlazado Cuerpo, TipoFuncion TipoFuncion) : ExpresionEnlazada
+/// <param name="DelegadoClr">Cuando va a un parámetro de .NET con un delegado propio (<c>Predicate&lt;T&gt;</c>), ese tipo; null para Func/Action.</param>
+public sealed record LambdaEnlazada(SimboloFuncion Simbolo, BloqueEnlazado Cuerpo, TipoFuncion TipoFuncion, Type? DelegadoClr = null) : ExpresionEnlazada
 {
     public override TipoLince Tipo => TipoFuncion;
 }
@@ -168,6 +169,46 @@ public sealed record InvocacionEnlazada(ExpresionEnlazada Funcion, ImmutableArra
 {
     public override TipoLince Tipo => ((TipoFuncion)Funcion.Tipo).Retorno;
 }
+
+// ----- Interoperabilidad con .NET -----
+
+/// <summary>Un tipo de .NET nombrado como receptor de miembros estáticos (<c>Math</c> en <c>Math.Sqrt(x)</c>). No es un valor.</summary>
+public sealed record TipoComoReceptorEnlazado(TipoExterno TipoExterno) : ExpresionEnlazada
+{
+    public override TipoLince Tipo => TipoLince.NombreDeTipo;
+}
+
+/// <summary>
+/// Llamada a un método de .NET, de instancia (con receptor) o estático. Los argumentos
+/// llegan con tipos de Lince; el emisor los ajusta a los parámetros de .NET en la frontera
+/// (<c>entero</c> a <c>int</c>, empaquetado a <c>object</c>) y ajusta el resultado al revés.
+/// </summary>
+public sealed record LlamadaExternaEnlazada(
+    ExpresionEnlazada? Receptor,
+    System.Reflection.MethodInfo Metodo,
+    ImmutableArray<ExpresionEnlazada> Argumentos,
+    TipoLince Tipo) : ExpresionEnlazada
+{
+    public override TipoLince Tipo { get; } = Tipo;
+}
+
+/// <summary><c>nuevo StringBuilder(...)</c>: un constructor de .NET.</summary>
+public sealed record NuevoExternoEnlazado(
+    System.Reflection.ConstructorInfo Constructor,
+    ImmutableArray<ExpresionEnlazada> Argumentos,
+    TipoExterno TipoExterno) : ExpresionEnlazada
+{
+    public override TipoLince Tipo => TipoExterno;
+}
+
+/// <summary>Lectura de una propiedad o campo de .NET, de instancia o estático (<c>DateTime.Now</c>, <c>sb.Length</c>, <c>DayOfWeek.Friday</c>).</summary>
+public sealed record MiembroExternoEnlazado(ExpresionEnlazada? Receptor, System.Reflection.MemberInfo Miembro, TipoLince Tipo) : ExpresionEnlazada
+{
+    public override TipoLince Tipo { get; } = Tipo;
+}
+
+/// <summary>Escritura de una propiedad o campo de .NET: <c>objeto.Propiedad = valor;</c>.</summary>
+public sealed record AsignacionExternaEnlazada(ExpresionEnlazada? Receptor, System.Reflection.MemberInfo Miembro, ExpresionEnlazada Valor) : SentenciaEnlazada;
 
 /// <summary>Llamada a un método sobre un objeto: <c>objeto.metodo(argumentos)</c>.</summary>
 public sealed record LlamadaMetodoEnlazada(ExpresionEnlazada Objeto, SimboloFuncion Metodo, ImmutableArray<ExpresionEnlazada> Argumentos) : ExpresionEnlazada

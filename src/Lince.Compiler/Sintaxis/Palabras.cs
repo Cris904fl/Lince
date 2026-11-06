@@ -38,6 +38,7 @@ public static class Palabras
         ["publico"] = TipoToken.PalabraPublico,
         ["lista"] = TipoToken.PalabraLista,
         ["mapa"] = TipoToken.PalabraMapa,
+        ["importar"] = TipoToken.PalabraImportar,
     }.ToFrozenDictionary();
 
     /// <summary>
@@ -46,7 +47,7 @@ public static class Palabras
     /// </summary>
     private static readonly FrozenSet<string> _reservadas = new[]
     {
-        "modulo", "importar", "segun", "caso", "intentar", "capturar", "lanzar",
+        "modulo", "segun", "caso", "intentar", "capturar", "lanzar",
         "interfaz", "enumeracion", "hereda", "asincrono", "esperar",
     }.ToFrozenSet();
 

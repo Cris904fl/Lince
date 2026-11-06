@@ -108,17 +108,37 @@ public sealed class AnalizadorSintactico
                 case TipoToken.PalabraClase or TipoToken.PalabraEstructura when modificador is null:
                     declaraciones.Add(AnalizarTipoDeclarado());
                     continue;
+                case TipoToken.PalabraImportar when modificador is null:
+                    declaraciones.Add(AnalizarImportar());
+                    continue;
             }
 
             InformarDeclaracionEsperada();
             // Saltar hasta la siguiente declaración para no arrastrar el error por todo el archivo.
-            while (Actual.Tipo is not (TipoToken.PalabraFuncion or TipoToken.PalabraClase or TipoToken.PalabraEstructura or TipoToken.FinDeArchivo))
+            while (Actual.Tipo is not (TipoToken.PalabraFuncion or TipoToken.PalabraClase or TipoToken.PalabraEstructura
+                or TipoToken.PalabraImportar or TipoToken.FinDeArchivo))
             {
                 Avanzar();
             }
         }
 
         return new ProgramaSintaxis(_archivo, declaraciones.ToImmutable(), Coincidir(TipoToken.FinDeArchivo));
+    }
+
+    /// <summary><c>importar System.Text.RegularExpressions;</c></summary>
+    private ImportarSintaxis AnalizarImportar()
+    {
+        var palabra = Avanzar();
+        var partes = ImmutableArray.CreateBuilder<Token>();
+        partes.Add(Coincidir(TipoToken.Identificador));
+        while (Actual.Tipo == TipoToken.Punto)
+        {
+            Avanzar();
+            partes.Add(Coincidir(TipoToken.Identificador));
+        }
+
+        var puntoYComa = Coincidir(TipoToken.PuntoYComa);
+        return new ImportarSintaxis(palabra, partes.ToImmutable(), puntoYComa);
     }
 
     private Token? LeerModificador() =>
@@ -133,7 +153,7 @@ public sealed class AnalizadorSintactico
             _ => "",
         };
         Informar(Codigos.SeEsperabaDeclaracion,
-            $"se esperaba 'funcion', 'clase' o 'estructura' pero se encontró {DescribirActual()}{pista}");
+            $"se esperaba 'funcion', 'clase', 'estructura' o 'importar' pero se encontró {DescribirActual()}{pista}");
     }
 
     private FuncionSintaxis AnalizarFuncion(Token? modificador)
