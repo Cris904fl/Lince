@@ -1,0 +1,125 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Lince",
+  "scopeName": "source.lince",
+  "patterns": [
+    { "include": "#comentarios" },
+    { "include": "#textos" },
+    { "include": "#numeros" },
+    { "include": "#declaraciones" },
+    { "include": "#palabras" },
+    { "include": "#tipos" },
+    { "include": "#llamadas" },
+    { "include": "#tipos-de-dotnet" },
+    { "include": "#operadores" }
+  ],
+  "repository": {
+    "comentarios": {
+      "patterns": [
+        { "name": "comment.line.double-slash.lince", "match": "//.*$" },
+        { "name": "comment.block.lince", "begin": "/\\*", "end": "\\*/" }
+      ]
+    },
+    "textos": {
+      "name": "string.quoted.double.lince",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        { "name": "constant.character.escape.lince", "match": "\\\\[nrt0\"\\\\]" },
+        { "name": "invalid.illegal.escape.lince", "match": "\\\\." }
+      ]
+    },
+    "numeros": {
+      "patterns": [
+        { "name": "constant.numeric.decimal.lince", "match": "\\b[0-9][0-9_]*\\.[0-9][0-9_]*\\b" },
+        { "name": "constant.numeric.integer.lince", "match": "\\b[0-9][0-9_]*\\b" }
+      ]
+    },
+    "declaraciones": {
+      "patterns": [
+        {
+          "comment": "funcion nombre( ... ): el nombre de la función",
+          "match": "\\b(funcion)\\s+([A-Za-z_\\u00C0-\\u024F][\\w\\u00C0-\\u024F]*|nuevo)\\b",
+          "captures": {
+            "1": { "name": "storage.type.function.lince" },
+            "2": { "name": "entity.name.function.lince" }
+          }
+        },
+        {
+          "comment": "clase Nombre / estructura Nombre / nuevo Nombre / importar Espacio.De.Nombres",
+          "match": "\\b(clase|estructura|nuevo)\\s+([A-Za-z_\\u00C0-\\u024F][\\w\\u00C0-\\u024F]*)",
+          "captures": {
+            "1": { "name": "keyword.other.lince" },
+            "2": { "name": "entity.name.type.lince" }
+          }
+        },
+        {
+          "match": "\\b(importar)\\s+([\\w.]+)",
+          "captures": {
+            "1": { "name": "keyword.control.import.lince" },
+            "2": { "name": "entity.name.namespace.lince" }
+          }
+        },
+        {
+          "comment": "sea x / var x: el nombre de la variable",
+          "match": "\\b(sea|var)\\s+([A-Za-z_\\u00C0-\\u024F][\\w\\u00C0-\\u024F]*)",
+          "captures": {
+            "1": { "name": "storage.modifier.lince" },
+            "2": { "name": "variable.other.definition.lince" }
+          }
+        },
+        {
+          "comment": "nombre: tipo en parámetros y campos",
+          "match": "\\b([A-Za-z_\\u00C0-\\u024F][\\w\\u00C0-\\u024F]*)\\s*(:)\\s*(?=[A-Za-z_\\u00C0-\\u024F])",
+          "captures": {
+            "1": { "name": "variable.parameter.lince" },
+            "2": { "name": "punctuation.separator.type.lince" }
+          }
+        }
+      ]
+    },
+    "palabras": {
+      "patterns": [
+        { "name": "keyword.control.lince", "match": "\\b(si|sino|mientras|para|en|regresar|romper|continuar)\\b" },
+        { "name": "keyword.other.lince", "match": "\\b(funcion|clase|estructura|nuevo|privado|publico|importar)\\b" },
+        { "name": "storage.modifier.lince", "match": "\\b(sea|var)\\b" },
+        { "name": "variable.language.este.lince", "match": "\\b(este)\\b" },
+        { "name": "constant.language.lince", "match": "\\b(verdadero|falso|nulo)\\b" },
+        { "name": "support.function.builtin.lince", "match": "\\b(imprimir)\\b(?=\\s*\\()" },
+        { "name": "invalid.deprecated.reservada.lince", "match": "\\b(modulo|segun|caso|intentar|capturar|lanzar|interfaz|enumeracion|hereda|asincrono|esperar)\\b" }
+      ]
+    },
+    "tipos": {
+      "patterns": [
+        { "name": "storage.type.primitive.lince", "match": "\\b(entero|decimal|texto|logico|nada)\\b" },
+        { "name": "storage.type.collection.lince", "match": "\\b(lista|mapa)\\b(?=\\s*<)" },
+        { "name": "storage.type.function.lince", "match": "\\b(funcion)\\b(?=\\s*\\()" }
+      ]
+    },
+    "llamadas": {
+      "comment": "nombre( ... ): una llamada a función o método",
+      "match": "\\b([a-z_\\u00DF-\\u00FF][\\w\\u00C0-\\u024F]*)(?=\\s*\\()",
+      "captures": {
+        "1": { "name": "entity.name.function.call.lince" }
+      }
+    },
+    "tipos-de-dotnet": {
+      "comment": "Un nombre con mayúscula inicial es un tipo: propio (Cuenta) o de .NET (Math, StringBuilder)",
+      "match": "\\b([A-Z][\\w\\u00C0-\\u024F]*)\\b",
+      "captures": {
+        "1": { "name": "entity.name.type.lince" }
+      }
+    },
+    "operadores": {
+      "patterns": [
+        { "name": "keyword.operator.arrow.lince", "match": "=>" },
+        { "name": "keyword.operator.comparison.lince", "match": "==|!=|<=|>=|<|>" },
+        { "name": "keyword.operator.assignment.lince", "match": "\\+=|-=|\\*=|/=|%=|=" },
+        { "name": "keyword.operator.logical.lince", "match": "&&|\\|\\||!" },
+        { "name": "keyword.operator.arithmetic.lince", "match": "\\+|-|\\*|/|%" },
+        { "name": "keyword.operator.range.lince", "match": "\\.\\." },
+        { "name": "keyword.operator.nullable.lince", "match": "\\?" }
+      ]
+    }
+  }
+}

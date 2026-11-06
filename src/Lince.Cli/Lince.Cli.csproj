@@ -4,6 +4,7 @@
     <OutputType>Exe</OutputType>
     <RootNamespace>Lince.Cli</RootNamespace>
     <AssemblyName>lince</AssemblyName>
+    <PackageId>Lince.Cli</PackageId>
     <Description>Línea de comandos del lenguaje Lince: compilar y ejecutar archivos .ln.</Description>
     <!-- Permite instalarlo como herramienta global de dotnet (ver README, sección Instalar). -->
     <PackAsTool>true</PackAsTool>

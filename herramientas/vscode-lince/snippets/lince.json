@@ -1,0 +1,69 @@
+{
+  "principal": {
+    "prefix": "principal",
+    "body": ["funcion principal() {", "    $0", "}"],
+    "description": "La función de entrada del programa"
+  },
+  "funcion": {
+    "prefix": "funcion",
+    "body": ["funcion ${1:nombre}(${2:parametro}: ${3:entero}): ${4:entero} {", "    $0", "}"],
+    "description": "Una función con parámetros y tipo de retorno"
+  },
+  "si": {
+    "prefix": "si",
+    "body": ["si ${1:condicion} {", "    $0", "}"],
+    "description": "si ... { }"
+  },
+  "si sino": {
+    "prefix": "sisino",
+    "body": ["si ${1:condicion} {", "    $2", "} sino {", "    $0", "}"],
+    "description": "si ... { } sino { }"
+  },
+  "mientras": {
+    "prefix": "mientras",
+    "body": ["mientras ${1:condicion} {", "    $0", "}"],
+    "description": "mientras ... { }"
+  },
+  "para en rango": {
+    "prefix": "para",
+    "body": ["para ${1:i} en ${2:0}..${3:10} {", "    $0", "}"],
+    "description": "para i en desde..hasta { }"
+  },
+  "para en coleccion": {
+    "prefix": "paraen",
+    "body": ["para ${1:elemento} en ${2:coleccion} {", "    $0", "}"],
+    "description": "para x en lista { }"
+  },
+  "clase": {
+    "prefix": "clase",
+    "body": [
+      "clase ${1:Nombre} {",
+      "    ${2:campo}: ${3:texto};",
+      "",
+      "    funcion nuevo(${2:campo}: ${3:texto}) {",
+      "        este.${2:campo} = ${2:campo};",
+      "    }",
+      "",
+      "    funcion ${4:describir}(): texto {",
+      "        regresar $0;",
+      "    }",
+      "}"
+    ],
+    "description": "Una clase con un campo, constructor y método"
+  },
+  "estructura": {
+    "prefix": "estructura",
+    "body": ["estructura ${1:Nombre} {", "    ${2:x}: ${3:decimal};", "    ${4:y}: ${3:decimal};", "}"],
+    "description": "Una estructura (tipo por valor)"
+  },
+  "lambda": {
+    "prefix": "lambda",
+    "body": ["${1:x} => ${0:x * 2}"],
+    "description": "Una lambda de expresión"
+  },
+  "importar": {
+    "prefix": "importar",
+    "body": ["importar ${1:System.Text};"],
+    "description": "Importar un espacio de nombres de .NET"
+  }
+}

@@ -106,6 +106,12 @@ ejemplos/mal.ln(4,12): error LN3011: no existe una variable llamada 'contadr'
                  ^
 ```
 
+## Editor
+
+En [herramientas/vscode-lince](herramientas/vscode-lince) hay una extensión de VS Code con
+resaltado de `.ln`, fragmentos y el comando **Lince: ejecutar** (Ctrl+F5). Se instala
+copiando la carpeta a `%USERPROFILE%\.vscode\extensions`; el detalle, en su README.
+
 ## Cómo está hecho
 
 El compilador sigue la arquitectura de Roslyn, en pequeño. Cada fase recibe el resultado de la

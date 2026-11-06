@@ -1,0 +1,65 @@
+{
+  "name": "lince",
+  "displayName": "Lince",
+  "description": "Resaltado de sintaxis, fragmentos y ejecución para el lenguaje Lince (.ln).",
+  "version": "0.1.0",
+  "publisher": "cris904fl",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Programming Languages"],
+  "main": "./extension.js",
+  "activationEvents": [
+    "onLanguage:lince"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "lince",
+        "aliases": ["Lince", "lince"],
+        "extensions": [".ln"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "lince",
+        "scopeName": "source.lince",
+        "path": "./syntaxes/lince.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "lince",
+        "path": "./snippets/lince.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "lince.ejecutar",
+        "title": "Lince: ejecutar"
+      },
+      {
+        "command": "lince.compilar",
+        "title": "Lince: compilar"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "lince.ejecutar",
+        "key": "ctrl+f5",
+        "when": "editorLangId == lince"
+      }
+    ],
+    "menus": {
+      "editor/title/run": [
+        {
+          "command": "lince.ejecutar",
+          "when": "editorLangId == lince",
+          "group": "navigation"
+        }
+      ]
+    }
+  }
+}
