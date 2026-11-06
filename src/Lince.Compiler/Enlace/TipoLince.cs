@@ -47,7 +47,34 @@ public class TipoLince
         || this is TipoNulable { Base: var b } && ReferenceEquals(b, Texto);
 
     /// <summary>Tipos por referencia: se pueden hacer nulables y se comparan por identidad.</summary>
-    public bool EsReferencia => ReferenceEquals(this, Texto) || this is TipoUsuario { EsEstructura: false } || this is TipoNulable;
+    public bool EsReferencia => ReferenceEquals(this, Texto) || this is TipoUsuario { EsEstructura: false } || this is TipoNulable || this is TipoGenerico;
+
+    public bool EsLista => this is TipoGenerico { EsLista: true };
+
+    public bool EsMapa => this is TipoGenerico { EsMapa: true };
+
+    private static readonly Dictionary<string, TipoGenerico> _genericos = new();
+
+    /// <summary><c>lista&lt;T&gt;</c>, único por tipo de elemento.</summary>
+    public static TipoGenerico Lista(TipoLince elemento) => Generico(TipoGenerico.NombreDeLista, [elemento]);
+
+    /// <summary><c>mapa&lt;K, V&gt;</c>, único por par de tipos.</summary>
+    public static TipoGenerico Mapa(TipoLince clave, TipoLince valor) => Generico(TipoGenerico.NombreDeMapa, [clave, valor]);
+
+    private static TipoGenerico Generico(string baseNombre, ImmutableArray<TipoLince> argumentos)
+    {
+        var nombre = $"{baseNombre}<{string.Join(", ", argumentos.Select(a => a.Nombre))}>";
+        lock (_genericos)
+        {
+            if (!_genericos.TryGetValue(nombre, out var generico))
+            {
+                generico = new TipoGenerico(nombre, baseNombre, argumentos);
+                _genericos[nombre] = generico;
+            }
+
+            return generico;
+        }
+    }
 
     public bool EsEstructura => this is TipoUsuario { EsEstructura: true };
 
@@ -102,6 +129,38 @@ public sealed class TipoNulable : TipoLince
     }
 
     public TipoLince Base { get; }
+}
+
+/// <summary>
+/// Una colección integrada con sus argumentos de tipo: <c>lista&lt;T&gt;</c> sobre
+/// <c>List&lt;T&gt;</c> y <c>mapa&lt;K, V&gt;</c> sobre <c>Dictionary&lt;K, V&gt;</c>. Sus
+/// miembros los define <see cref="Integrados"/>.
+/// </summary>
+public sealed class TipoGenerico : TipoLince
+{
+    public const string NombreDeLista = "lista";
+    public const string NombreDeMapa = "mapa";
+
+    internal TipoGenerico(string nombre, string baseNombre, ImmutableArray<TipoLince> argumentos)
+        : base(nombre, null)
+    {
+        BaseNombre = baseNombre;
+        Argumentos = argumentos;
+    }
+
+    public string BaseNombre { get; }
+
+    public ImmutableArray<TipoLince> Argumentos { get; }
+
+    public new bool EsLista => BaseNombre == NombreDeLista;
+
+    public new bool EsMapa => BaseNombre == NombreDeMapa;
+
+    /// <summary>El tipo de lo que guarda: el elemento de una lista o el valor de un mapa.</summary>
+    public TipoLince Elemento => EsLista ? Argumentos[0] : Argumentos[1];
+
+    /// <summary>El tipo con el que se indexa: entero en una lista, la clave en un mapa.</summary>
+    public TipoLince Indice => EsLista ? Entero : Argumentos[0];
 }
 
 /// <summary>

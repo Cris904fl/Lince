@@ -1,0 +1,60 @@
+// Colecciones: lista<T>, mapa<K, V>, literales, índices, para...en y los métodos de texto.
+
+clase Producto {
+    nombre: texto;
+    precio: decimal;
+    cantidad: entero;
+
+    funcion total(): decimal {
+        regresar precio * cantidad;
+    }
+}
+
+funcion principal() {
+    sea productos = [
+        nuevo Producto("café", 12.5, 10),
+        nuevo Producto("azúcar", 3.2, 40),
+        nuevo Producto("arroz", 4.8, 25)
+    ];
+
+    var total: decimal = 0;
+    para p en productos {
+        imprimir(p.nombre.mayusculas() + ": " + p.cantidad + " x " + p.precio + " = " + p.total());
+        total += p.total();
+    }
+    imprimir("Total del inventario: " + total);
+
+    // Un mapa de nombre a producto, para buscar sin recorrer.
+    sea porNombre = nuevo mapa<texto, Producto>();
+    para p en productos {
+        porNombre[p.nombre] = p;
+    }
+    si porNombre.contiene("arroz") {
+        imprimir("arroz cuesta " + porNombre["arroz"].precio);
+    }
+
+    // Conteo de palabras con un mapa de texto a entero.
+    sea frase = "el lince y el gato y el perro";
+    sea conteo = nuevo mapa<texto, entero>();
+    para palabra en frase.partir(" ") {
+        si conteo.contiene(palabra) {
+            conteo[palabra] += 1;
+        } sino {
+            conteo[palabra] = 1;
+        }
+    }
+    para palabra en conteo {
+        imprimir(palabra + ": " + conteo[palabra]);
+    }
+
+    // Listas de números: índices, cantidad y métodos.
+    sea numeros = [5, 3, 9, 1];
+    numeros.agregar(7);
+    numeros.quitar(3);
+    var suma = 0;
+    para i en 0..numeros.cantidad {
+        suma += numeros[i];
+    }
+    imprimir("suma " + suma + ", mayor en posición " + numeros.indiceDe(9) + ", raíz de 2 = " + 2.0.raiz().redondear());
+    imprimir("texto '" + "  Lince  ".recortar() + "' tiene " + "Lince".longitud + " letras y '42'.aEntero() + 1 = " + ("42".aEntero() + 1));
+}

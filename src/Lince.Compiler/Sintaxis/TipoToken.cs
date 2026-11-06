@@ -38,6 +38,8 @@ public enum TipoToken
     PalabraEste,
     PalabraPrivado,
     PalabraPublico,
+    PalabraLista,
+    PalabraMapa,
 
     /// <summary>Reservada para fases siguientes; usarla hoy es un error de sintaxis.</summary>
     PalabraReservada,
@@ -47,6 +49,8 @@ public enum TipoToken
     ParentesisCierra,
     LlaveAbre,
     LlaveCierra,
+    CorcheteAbre,
+    CorcheteCierra,
     Coma,
     PuntoYComa,
     DosPuntos,

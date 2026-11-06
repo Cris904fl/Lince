@@ -285,6 +285,18 @@ public sealed class Enlazador
             return TipoLince.Error;
         }
 
+        if (tipo.Palabra.Tipo is TipoToken.PalabraLista or TipoToken.PalabraMapa)
+        {
+            return ResolverColeccion(tipo);
+        }
+
+        if (tipo.Argumentos.Length > 0)
+        {
+            _diagnosticos.Error(Codigos.ArgumentosDeTipo, tipo.Ubicacion,
+                $"'{tipo.Palabra.Texto}' no lleva argumentos de tipo; solo lista<T> y mapa<K, V> los llevan");
+            return TipoLince.Error;
+        }
+
         if (tipo.Palabra.Tipo == TipoToken.Identificador)
         {
             if (_tipos.TryGetValue(tipo.Palabra.Texto, out var usuario))
@@ -297,6 +309,36 @@ public sealed class Enlazador
         }
 
         return TipoLince.DesdePalabra(tipo.Palabra.Tipo) ?? TipoLince.Error;
+    }
+
+    private TipoLince ResolverColeccion(TipoSintaxis tipo)
+    {
+        var esLista = tipo.Palabra.Tipo == TipoToken.PalabraLista;
+        var esperados = esLista ? 1 : 2;
+        if (tipo.Argumentos.Length != esperados)
+        {
+            var forma = esLista ? "lista<T>, por ejemplo lista<entero>" : "mapa<K, V>, por ejemplo mapa<texto, entero>";
+            _diagnosticos.Error(Codigos.ArgumentosDeTipo, tipo.Ubicacion,
+                $"'{tipo.Palabra.Texto}' se escribe {forma}");
+            return TipoLince.Error;
+        }
+
+        var argumentos = tipo.Argumentos.Select(ResolverTipo).ToImmutableArray();
+        foreach (var (argumento, sintaxis) in argumentos.Zip(tipo.Argumentos))
+        {
+            if (ReferenceEquals(argumento, TipoLince.Nada))
+            {
+                _diagnosticos.Error(Codigos.TipoIncompatible, sintaxis.Ubicacion, "una colección no puede guardar valores de tipo 'nada'");
+                return TipoLince.Error;
+            }
+        }
+
+        if (argumentos.Any(a => a.EsError))
+        {
+            return TipoLince.Error;
+        }
+
+        return esLista ? TipoLince.Lista(argumentos[0]) : TipoLince.Mapa(argumentos[0], argumentos[1]);
     }
 
     private SimboloFuncion? ComprobarPrincipal(ProgramaSintaxis programa)
@@ -367,7 +409,7 @@ public sealed class Enlazador
             }
 
             _ambito = new Ambito(null);
-            var valor = EnlazarExpresion(campo.Declaracion.Inicial);
+            var valor = EnlazarExpresion(campo.Declaracion.Inicial, campo.Tipo);
             valor = Convertir(valor, campo.Tipo, campo.Declaracion.Inicial.Ubicacion,
                 origen => $"el valor inicial del campo '{campo.Nombre}' debe ser '{campo.Tipo}' y es '{origen}'");
             iniciales.Add(new CampoInicialEnlazado(campo, valor));
@@ -442,8 +484,8 @@ public sealed class Enlazador
 
     private SentenciaEnlazada EnlazarDeclaracionVariable(DeclaracionVariableSintaxis declaracion)
     {
-        var valor = EnlazarExpresion(declaracion.Valor);
         TipoLince tipo;
+        ExpresionEnlazada valor;
 
         if (declaracion.Tipo is not null)
         {
@@ -454,11 +496,14 @@ public sealed class Enlazador
                 tipo = TipoLince.Error;
             }
 
+            // El tipo declarado guía a los literales de colección: sea l: lista<entero> = [];
+            valor = EnlazarExpresion(declaracion.Valor, tipo);
             valor = Convertir(valor, tipo, declaracion.Valor.Ubicacion,
                 origen => $"no se puede guardar un valor de tipo '{origen}' en la variable '{declaracion.Nombre.Texto}' de tipo '{tipo}'");
         }
         else
         {
+            valor = EnlazarExpresion(declaracion.Valor);
             tipo = InferirTipo(valor, declaracion.Valor.Ubicacion, declaracion.Nombre.Texto);
         }
 
@@ -613,9 +658,9 @@ public sealed class Enlazador
                 return RaicesAsignadas(para.Cuerpo);
             case AsignacionSintaxis asignacion:
                 var objetivo = asignacion.Objetivo;
-                while (objetivo is MiembroSintaxis miembro)
+                while (objetivo is MiembroSintaxis or IndiceSintaxis)
                 {
-                    objetivo = miembro.Objeto;
+                    objetivo = objetivo is MiembroSintaxis miembro ? miembro.Objeto : ((IndiceSintaxis)objetivo).Objeto;
                 }
 
                 return RutaDeSintaxis(objetivo) is { } raiz ? [raiz] : [];
@@ -666,12 +711,12 @@ public sealed class Enlazador
 
     private SentenciaEnlazada EnlazarAsignacion(AsignacionSintaxis asignacion)
     {
-        var valor = EnlazarExpresion(asignacion.Valor);
-
-        // El objetivo: una variable, o un campo (a secas dentro de un método, o como objeto.campo).
+        // El objetivo: una variable, un campo (a secas dentro de un método, o como objeto.campo)
+        // o un elemento de colección (coleccion[indice]).
         SimboloVariable? variable = null;
         ExpresionEnlazada? objeto = null;
         SimboloCampo? campo = null;
+        IndiceEnlazado? elemento = null;
 
         switch (asignacion.Objetivo)
         {
@@ -685,6 +730,7 @@ public sealed class Enlazador
                 else if (variable is null)
                 {
                     BuscarVariable(nombre.Identificador); // informa el error adecuado
+                    EnlazarExpresion(asignacion.Valor);
                     return new ExpresionSentenciaEnlazada(new ErrorEnlazado());
                 }
 
@@ -692,22 +738,44 @@ public sealed class Enlazador
 
             case MiembroSintaxis miembro:
                 objeto = EnlazarExpresion(miembro.Objeto);
+                if (objeto.Tipo is not TipoUsuario && !objeto.Tipo.EsError && !objeto.Tipo.EsNulable
+                    && Integrados.Buscar(objeto.Tipo, miembro.Nombre.Texto) is { EsPropiedad: true })
+                {
+                    _diagnosticos.Error(Codigos.MiembroDeSoloLectura, miembro.Nombre.Ubicacion,
+                        $"'{miembro.Nombre.Texto}' de '{objeto.Tipo}' es de solo lectura");
+                    EnlazarExpresion(asignacion.Valor);
+                    return new ExpresionSentenciaEnlazada(new ErrorEnlazado());
+                }
+
                 campo = BuscarCampoDe(objeto, miembro.Nombre, miembro.Objeto);
                 if (campo is null)
                 {
+                    EnlazarExpresion(asignacion.Valor);
                     return new ExpresionSentenciaEnlazada(new ErrorEnlazado());
                 }
 
                 ComprobarObjetivoDeEstructura(objeto, miembro.Objeto.Ubicacion);
                 break;
 
+            case IndiceSintaxis indice:
+                if (EnlazarIndice(indice) is not IndiceEnlazado indiceEnlazado)
+                {
+                    EnlazarExpresion(asignacion.Valor);
+                    return new ExpresionSentenciaEnlazada(new ErrorEnlazado());
+                }
+
+                elemento = indiceEnlazado;
+                break;
+
             default:
                 // El analizador ya informó que el objetivo no es válido.
+                EnlazarExpresion(asignacion.Valor);
                 return new ExpresionSentenciaEnlazada(new ErrorEnlazado());
         }
 
-        var tipoObjetivo = variable?.Tipo ?? campo!.Tipo;
-        var nombreObjetivo = variable?.Nombre ?? campo!.Nombre;
+        var tipoObjetivo = variable?.Tipo ?? campo?.Tipo ?? elemento!.Tipo;
+        var nombreObjetivo = variable?.Nombre ?? campo?.Nombre ?? "el elemento";
+        var valor = EnlazarExpresion(asignacion.Valor, asignacion.Operador.Tipo == TipoToken.Igual ? tipoObjetivo : null);
 
         if (variable is not null && !variable.EsMutable)
         {
@@ -731,7 +799,9 @@ public sealed class Enlazador
                 TipoToken.BarraIgual => TipoToken.Barra,
                 _ => TipoToken.Porcentaje,
             };
-            ExpresionEnlazada actual = variable is not null ? new VariableEnlazada(variable) : new CampoEnlazado(objeto!, campo!);
+            ExpresionEnlazada actual = variable is not null ? new VariableEnlazada(variable)
+                : campo is not null ? new CampoEnlazado(objeto!, campo)
+                : elemento!;
             valor = EnlazarBinaria(actual, operador, valor, asignacion.Operador.Ubicacion);
         }
 
@@ -742,6 +812,11 @@ public sealed class Enlazador
         {
             AnotarAsignacion(RutaDeVariable(variable), tipoObjetivo, valor);
             return new AsignacionEnlazada(variable, valor);
+        }
+
+        if (elemento is not null)
+        {
+            return new AsignacionIndiceEnlazada(elemento.Objeto, elemento.Indice, valor);
         }
 
         AnotarAsignacion(Ruta(objeto!) is { } rutaObjeto ? rutaObjeto + "." + campo!.Nombre : null, tipoObjetivo, valor);
@@ -826,10 +901,15 @@ public sealed class Enlazador
         return new MientrasEnlazado(condicion, cuerpo);
     }
 
-    private ParaEnlazado EnlazarPara(ParaSintaxis para)
+    private SentenciaEnlazada EnlazarPara(ParaSintaxis para)
     {
+        if (!para.EsRango)
+        {
+            return EnlazarParaEnColeccion(para);
+        }
+
         var desde = EnlazarLimiteDePara(para.Desde);
-        var hasta = EnlazarLimiteDePara(para.Hasta);
+        var hasta = EnlazarLimiteDePara(para.Hasta!);
         OlvidarLoQueAsigna(para.Cuerpo);
         var antes = _noNulos;
 
@@ -842,6 +922,53 @@ public sealed class Enlazador
         _noNulos = antes;
 
         return new ParaEnlazado(variable, limite, desde, hasta, cuerpo);
+    }
+
+    /// <summary><c>para x en lista</c> recorre los elementos; <c>para k en mapa</c>, las claves (por su lista).</summary>
+    private SentenciaEnlazada EnlazarParaEnColeccion(ParaSintaxis para)
+    {
+        var coleccion = EnlazarExpresion(para.Desde);
+        TipoLince tipoElemento;
+
+        if (coleccion.Tipo.EsError)
+        {
+            tipoElemento = TipoLince.Error;
+        }
+        else if (coleccion.Tipo.EsNulable)
+        {
+            InformarMiembroDeNulable(coleccion, para.Desde);
+            tipoElemento = TipoLince.Error;
+        }
+        else if (coleccion.Tipo is TipoGenerico { EsLista: true } lista)
+        {
+            tipoElemento = lista.Elemento;
+        }
+        else if (coleccion.Tipo is TipoGenerico { EsMapa: true } mapa)
+        {
+            var claves = Integrados.Buscar(mapa, "claves")!;
+            coleccion = new MiembroIntegradoEnlazado(coleccion, claves, []);
+            tipoElemento = mapa.Argumentos[0];
+        }
+        else
+        {
+            _diagnosticos.Error(Codigos.NoSePuedeRecorrer, para.Desde.Ubicacion,
+                $"'para ... en' recorre una lista, las claves de un mapa o un rango a..b, no un valor de tipo '{coleccion.Tipo}'");
+            tipoElemento = TipoLince.Error;
+        }
+
+        OlvidarLoQueAsigna(para.Cuerpo);
+        var antes = _noNulos;
+
+        _ambito = new Ambito(_ambito);
+        var variable = new SimboloVariable(para.Variable.Texto, tipoElemento, esMutable: false, ClaseDeVariable.Ciclo);
+        DeclararVariable(variable, para.Variable);
+        var copia = new SimboloVariable("<coleccion>", coleccion.Tipo, esMutable: false, ClaseDeVariable.Oculta);
+        var indice = new SimboloVariable("<indice>", TipoLince.Entero, esMutable: false, ClaseDeVariable.Oculta);
+        var cuerpo = EnlazarCuerpoDeCiclo(para.Cuerpo);
+        _ambito = _ambito.Padre!;
+        _noNulos = antes;
+
+        return new ParaEnColeccionEnlazado(variable, copia, indice, coleccion, cuerpo);
     }
 
     private ExpresionEnlazada EnlazarLimiteDePara(ExpresionSintaxis sintaxis)
@@ -893,7 +1020,7 @@ public sealed class Enlazador
             return new RegresarEnlazado(null);
         }
 
-        var valor = EnlazarExpresion(regresar.Valor);
+        var valor = EnlazarExpresion(regresar.Valor, tipoRetorno);
         if (ReferenceEquals(tipoRetorno, TipoLince.Nada))
         {
             if (!valor.Tipo.EsError)
@@ -926,7 +1053,8 @@ public sealed class Enlazador
     private ExpresionSentenciaEnlazada EnlazarExpresionSentencia(ExpresionSentenciaSintaxis sentencia)
     {
         var expresion = EnlazarExpresion(sentencia.Expresion);
-        if (expresion is not (LlamadaEnlazada or LlamadaMetodoEnlazada or ImprimirEnlazado or NuevoEnlazado or ErrorEnlazado))
+        if (expresion is not (LlamadaEnlazada or LlamadaMetodoEnlazada or ImprimirEnlazado or NuevoEnlazado or ErrorEnlazado
+            or MiembroIntegradoEnlazado { Miembro.EsPropiedad: false }))
         {
             _diagnosticos.Error(Codigos.ExpresionSinEfecto, sentencia.Expresion.Ubicacion,
                 "esta expresión no tiene efecto; solo una llamada a función puede ir sola como sentencia");
@@ -938,8 +1066,23 @@ public sealed class Enlazador
 
     // ----- Expresiones -----
 
+    /// <param name="esperado">
+    /// El tipo que el contexto espera (el declarado de una variable, el del parámetro, el de
+    /// retorno). Solo lo usan los literales de colección, para saber de qué tipo es <c>[]</c>.
+    /// </param>
+    private ExpresionEnlazada EnlazarExpresion(ExpresionSintaxis expresion, TipoLince? esperado) => expresion switch
+    {
+        ListaLiteralSintaxis lista => EnlazarListaLiteral(lista, esperado),
+        MapaLiteralSintaxis mapa => EnlazarMapaLiteral(mapa, esperado),
+        ParentesisSintaxis parentesis => EnlazarExpresion(parentesis.Expresion, esperado),
+        _ => EnlazarExpresion(expresion),
+    };
+
     private ExpresionEnlazada EnlazarExpresion(ExpresionSintaxis expresion) => expresion switch
     {
+        ListaLiteralSintaxis lista => EnlazarListaLiteral(lista, null),
+        MapaLiteralSintaxis mapa => EnlazarMapaLiteral(mapa, null),
+        IndiceSintaxis indice => EnlazarIndice(indice),
         LiteralSintaxis literal => EnlazarLiteral(literal),
         NombreSintaxis nombre => EnlazarNombre(nombre),
         EsteSintaxis este => EnlazarEste(este),
@@ -1174,11 +1317,11 @@ public sealed class Enlazador
                         return new BinariaEnlazada(ATexto(izquierda), op, ATexto(derecha), TipoLince.Logico);
                     }
 
-                    // Dos referencias de la misma clase (con o sin '?', o una y nulo): por identidad.
-                    var clase = ti.SinNulo as TipoUsuario ?? td.SinNulo as TipoUsuario;
-                    if (clase is { EsEstructura: false }
-                        && (ReferenceEquals(ti.SinNulo, clase) || ReferenceEquals(ti, TipoLince.Nulo))
-                        && (ReferenceEquals(td.SinNulo, clase) || ReferenceEquals(td, TipoLince.Nulo)))
+                    // Dos referencias del mismo tipo (clase o colección, con o sin '?', o una y nulo): por identidad.
+                    var referencia = EsReferenciaComparable(ti.SinNulo) ? ti.SinNulo : EsReferenciaComparable(td.SinNulo) ? td.SinNulo : null;
+                    if (referencia is not null
+                        && (ReferenceEquals(ti.SinNulo, referencia) || ReferenceEquals(ti, TipoLince.Nulo))
+                        && (ReferenceEquals(td.SinNulo, referencia) || ReferenceEquals(td, TipoLince.Nulo)))
                     {
                         return new BinariaEnlazada(izquierda, op, derecha, TipoLince.Logico);
                     }
@@ -1197,6 +1340,8 @@ public sealed class Enlazador
                 return null;
         }
     }
+
+    private static bool EsReferenciaComparable(TipoLince tipo) => tipo is TipoUsuario { EsEstructura: false } or TipoGenerico;
 
     private static TipoLince TipoNumericoComun(TipoLince a, TipoLince b) =>
         ReferenceEquals(a, TipoLince.Decimal) || ReferenceEquals(b, TipoLince.Decimal) ? TipoLince.Decimal : TipoLince.Entero;
@@ -1289,9 +1434,7 @@ public sealed class Enlazador
 
         if (objeto.Tipo is not TipoUsuario tipo)
         {
-            _diagnosticos.Error(Codigos.MiembroNoExiste, miembro.Nombre.Ubicacion,
-                $"el tipo '{objeto.Tipo}' no tiene métodos en esta versión del lenguaje");
-            return new ErrorEnlazado();
+            return EnlazarLlamadaIntegrada(objeto, miembro.Nombre, argumentos, llamada);
         }
 
         var nombre = miembro.Nombre.Texto;
@@ -1412,8 +1555,202 @@ public sealed class Enlazador
     private ExpresionEnlazada EnlazarMiembro(MiembroSintaxis miembro)
     {
         var objeto = EnlazarExpresion(miembro.Objeto);
+        if (objeto.Tipo is not TipoUsuario && !objeto.Tipo.EsError && !objeto.Tipo.EsNulable && !miembro.Nombre.EsFaltante)
+        {
+            return EnlazarPropiedadIntegrada(objeto, miembro.Nombre);
+        }
+
         var campo = BuscarCampoDe(objeto, miembro.Nombre, miembro.Objeto);
         return campo is null ? new ErrorEnlazado() : AplicarNoNulo(new CampoEnlazado(objeto, campo));
+    }
+
+    // ----- Tipos integrados: texto, números, lista y mapa -----
+
+    private ExpresionEnlazada EnlazarPropiedadIntegrada(ExpresionEnlazada objeto, Token nombre)
+    {
+        var miembro = Integrados.Buscar(objeto.Tipo, nombre.Texto);
+        if (miembro is null)
+        {
+            InformarMiembroIntegradoInexistente(objeto.Tipo, nombre);
+            return new ErrorEnlazado();
+        }
+
+        if (!miembro.EsPropiedad)
+        {
+            _diagnosticos.Error(Codigos.NombreNoEsVariable, nombre.Ubicacion,
+                $"'{nombre.Texto}' es un método de '{objeto.Tipo}'; para llamarlo escriba .{nombre.Texto}(...)");
+            return new ErrorEnlazado();
+        }
+
+        return new MiembroIntegradoEnlazado(objeto, miembro, []);
+    }
+
+    private ExpresionEnlazada EnlazarLlamadaIntegrada(ExpresionEnlazada objeto, Token nombre, ImmutableArray<ExpresionEnlazada> argumentos, LlamadaSintaxis llamada)
+    {
+        var miembro = Integrados.Buscar(objeto.Tipo, nombre.Texto);
+        if (miembro is null)
+        {
+            InformarMiembroIntegradoInexistente(objeto.Tipo, nombre);
+            return new ErrorEnlazado();
+        }
+
+        if (miembro.EsPropiedad)
+        {
+            _diagnosticos.Error(Codigos.NombreNoEsVariable, nombre.Ubicacion,
+                $"'{nombre.Texto}' de '{objeto.Tipo}' no es un método; se lee sin paréntesis: .{nombre.Texto}");
+            return new ErrorEnlazado();
+        }
+
+        var convertidos = ConvertirArgumentos(nombre.Texto, miembro.Parametros, argumentos, llamada.Argumentos, llamada.Ubicacion);
+        return convertidos is null ? new ErrorEnlazado() : new MiembroIntegradoEnlazado(objeto, miembro, convertidos.Value);
+    }
+
+    private void InformarMiembroIntegradoInexistente(TipoLince tipo, Token nombre)
+    {
+        var disponibles = Integrados.MiembrosDe(tipo).Select(m => m.Nombre).ToList();
+        var pista = disponibles.Count == 0 ? "" : $"; tiene: {string.Join(", ", disponibles)}";
+        _diagnosticos.Error(Codigos.MiembroNoExiste, nombre.Ubicacion,
+            $"el tipo '{tipo}' no tiene un miembro llamado '{nombre.Texto}'{pista}");
+    }
+
+    private ExpresionEnlazada EnlazarListaLiteral(ListaLiteralSintaxis lista, TipoLince? esperado)
+    {
+        var tipoEsperado = esperado?.SinNulo as TipoGenerico;
+        if (lista.Elementos.Length == 0)
+        {
+            if (tipoEsperado is { EsLista: true })
+            {
+                return new ListaLiteralEnlazado(tipoEsperado, []);
+            }
+
+            if (esperado is not { EsError: true })
+            {
+                _diagnosticos.Error(Codigos.ColeccionVaciaSinTipo, lista.Ubicacion,
+                    "una lista vacía necesita saber su tipo: declare la variable (sea l: lista<entero> = [];) o use nuevo lista<entero>()");
+            }
+
+            return new ErrorEnlazado();
+        }
+
+        var elementos = lista.Elementos.Select(e => EnlazarExpresion(e)).ToList();
+        var tipoElemento = tipoEsperado is { EsLista: true } ? tipoEsperado.Elemento : TipoDeElemento(elementos, lista.Elementos[0]);
+        if (tipoElemento.EsError)
+        {
+            return new ErrorEnlazado();
+        }
+
+        var convertidos = ImmutableArray.CreateBuilder<ExpresionEnlazada>(elementos.Count);
+        var hayError = false;
+        for (var i = 0; i < elementos.Count; i++)
+        {
+            var convertido = Convertir(elementos[i], tipoElemento, lista.Elementos[i].Ubicacion,
+                origen => $"todos los elementos de la lista deben ser '{tipoElemento}' y este es '{origen}'");
+            hayError |= convertido.Tipo.EsError;
+            convertidos.Add(convertido);
+        }
+
+        return hayError ? new ErrorEnlazado() : new ListaLiteralEnlazado(TipoLince.Lista(tipoElemento), convertidos.MoveToImmutable());
+    }
+
+    private ExpresionEnlazada EnlazarMapaLiteral(MapaLiteralSintaxis mapa, TipoLince? esperado)
+    {
+        var tipoEsperado = esperado?.SinNulo as TipoGenerico;
+        if (mapa.Pares.Length == 0)
+        {
+            if (tipoEsperado is { EsMapa: true })
+            {
+                return new MapaLiteralEnlazado(tipoEsperado, []);
+            }
+
+            if (esperado is not { EsError: true })
+            {
+                _diagnosticos.Error(Codigos.ColeccionVaciaSinTipo, mapa.Ubicacion,
+                    "un mapa vacío necesita saber su tipo: declare la variable (sea m: mapa<texto, entero> = {};) o use nuevo mapa<texto, entero>()");
+            }
+
+            return new ErrorEnlazado();
+        }
+
+        var claves = mapa.Pares.Select(p => EnlazarExpresion(p.Clave)).ToList();
+        var valores = mapa.Pares.Select(p => EnlazarExpresion(p.Valor)).ToList();
+        var tipoClave = tipoEsperado is { EsMapa: true } ? tipoEsperado.Argumentos[0] : TipoDeElemento(claves, mapa.Pares[0].Clave);
+        var tipoValor = tipoEsperado is { EsMapa: true } ? tipoEsperado.Argumentos[1] : TipoDeElemento(valores, mapa.Pares[0].Valor);
+        if (tipoClave.EsError || tipoValor.EsError)
+        {
+            return new ErrorEnlazado();
+        }
+
+        var pares = ImmutableArray.CreateBuilder<ParEnlazado>(claves.Count);
+        var hayError = false;
+        for (var i = 0; i < claves.Count; i++)
+        {
+            var clave = Convertir(claves[i], tipoClave, mapa.Pares[i].Clave.Ubicacion,
+                origen => $"todas las claves del mapa deben ser '{tipoClave}' y esta es '{origen}'");
+            var valor = Convertir(valores[i], tipoValor, mapa.Pares[i].Valor.Ubicacion,
+                origen => $"todos los valores del mapa deben ser '{tipoValor}' y este es '{origen}'");
+            hayError |= clave.Tipo.EsError || valor.Tipo.EsError;
+            pares.Add(new ParEnlazado(clave, valor));
+        }
+
+        return hayError ? new ErrorEnlazado() : new MapaLiteralEnlazado(TipoLince.Mapa(tipoClave, tipoValor), pares.MoveToImmutable());
+    }
+
+    /// <summary>
+    /// El tipo que un literal de colección toma de sus elementos: el del primero, salvo que
+    /// todos sean números y alguno decimal (entonces decimal). Nulo y nada no sirven.
+    /// </summary>
+    private TipoLince TipoDeElemento(List<ExpresionEnlazada> elementos, ExpresionSintaxis sintaxis)
+    {
+        if (elementos.All(e => e.Tipo.EsNumerico) && elementos.Any(e => ReferenceEquals(e.Tipo, TipoLince.Decimal)))
+        {
+            return TipoLince.Decimal;
+        }
+
+        var primero = elementos[0];
+        if (ReferenceEquals(primero.Tipo, TipoLince.Nulo))
+        {
+            _diagnosticos.Error(Codigos.NoSePuedeInferir, sintaxis.Ubicacion,
+                "'nulo' no basta para saber el tipo de la colección; declare la variable con su tipo (lista<texto?>)");
+            return TipoLince.Error;
+        }
+
+        if (ReferenceEquals(primero.Tipo, TipoLince.Nada))
+        {
+            _diagnosticos.Error(Codigos.ExpresionSinValor, sintaxis.Ubicacion, "la expresión no produce ningún valor (la función regresa 'nada')");
+            return TipoLince.Error;
+        }
+
+        return primero.Tipo;
+    }
+
+    private ExpresionEnlazada EnlazarIndice(IndiceSintaxis indice)
+    {
+        var objeto = EnlazarExpresion(indice.Objeto);
+        var posicion = EnlazarExpresion(indice.Indice);
+
+        if (objeto.Tipo.EsError || posicion.Tipo.EsError)
+        {
+            return new ErrorEnlazado();
+        }
+
+        if (objeto.Tipo.EsNulable)
+        {
+            InformarMiembroDeNulable(objeto, indice.Objeto);
+            return new ErrorEnlazado();
+        }
+
+        if (objeto.Tipo is not TipoGenerico coleccion)
+        {
+            var pista = objeto.Tipo.EsTextual ? "; para un trozo de texto use .subtexto(inicio, longitud)" : "";
+            _diagnosticos.Error(Codigos.NoSePuedeIndexar, indice.CorcheteAbre.Ubicacion,
+                $"no se puede indexar un valor de tipo '{objeto.Tipo}'; solo las listas y los mapas llevan [ ]{pista}");
+            return new ErrorEnlazado();
+        }
+
+        var que = coleccion.EsLista ? "el índice de una lista" : "la clave del mapa";
+        posicion = Convertir(posicion, coleccion.Indice, indice.Indice.Ubicacion,
+            origen => $"{que} debe ser '{coleccion.Indice}' y este es '{origen}'");
+        return posicion.Tipo.EsError ? new ErrorEnlazado() : new IndiceEnlazado(objeto, posicion, coleccion.Elemento);
     }
 
     private void InformarMiembroDeNulable(ExpresionEnlazada objeto, ExpresionSintaxis sintaxis)
@@ -1474,26 +1811,43 @@ public sealed class Enlazador
     private ExpresionEnlazada EnlazarNuevo(NuevoSintaxis nuevo)
     {
         var argumentos = EnlazarArgumentos(nuevo.Argumentos);
-        if (nuevo.Tipo.EsFaltante)
+        if (nuevo.Tipo.Palabra.EsFaltante)
         {
             return new ErrorEnlazado();
         }
 
-        if (nuevo.Tipo.Tipo != TipoToken.Identificador)
+        if (nuevo.Tipo.EsNulable)
         {
-            _diagnosticos.Error(Codigos.NuevoDeTipoBasico, nuevo.Tipo.Ubicacion,
-                $"'{nuevo.Tipo.Texto}' es un tipo básico y no se crea con 'nuevo'; escriba el valor directamente");
+            _diagnosticos.Error(Codigos.NuevoDeTipoBasico, nuevo.Tipo.Interrogacion!.Ubicacion,
+                "lo que crea 'nuevo' nunca es nulo; quite el '?'");
             return new ErrorEnlazado();
         }
 
-        if (!_tipos.TryGetValue(nuevo.Tipo.Texto, out var tipo))
+        var tipo = ResolverTipo(nuevo.Tipo);
+        switch (tipo)
         {
-            _diagnosticos.Error(Codigos.TipoNoExiste, nuevo.Tipo.Ubicacion, $"no existe un tipo llamado '{nuevo.Tipo.Texto}'");
-            return new ErrorEnlazado();
-        }
+            case TipoGenerico coleccion:
+                if (argumentos.Length > 0)
+                {
+                    _diagnosticos.Error(Codigos.CantidadDeArgumentos, nuevo.Ubicacion,
+                        $"'nuevo {coleccion}()' no recibe argumentos; para crearla con elementos use un literal: [1, 2] o {{\"a\": 1}}");
+                    return new ErrorEnlazado();
+                }
 
-        var convertidos = ConvertirArgumentos($"nuevo {tipo.Nombre}", tipo.ParametrosDeNuevo, argumentos, nuevo.Argumentos, nuevo.Ubicacion);
-        return convertidos is null ? new ErrorEnlazado() : new NuevoEnlazado(tipo, convertidos.Value);
+                return new NuevaColeccionEnlazada(coleccion);
+
+            case TipoUsuario usuario:
+                var convertidos = ConvertirArgumentos($"nuevo {usuario.Nombre}", usuario.ParametrosDeNuevo, argumentos, nuevo.Argumentos, nuevo.Ubicacion);
+                return convertidos is null ? new ErrorEnlazado() : new NuevoEnlazado(usuario, convertidos.Value);
+
+            case { EsError: true }:
+                return new ErrorEnlazado();
+
+            default:
+                _diagnosticos.Error(Codigos.NuevoDeTipoBasico, nuevo.Tipo.Ubicacion,
+                    $"'{tipo}' es un tipo básico y no se crea con 'nuevo'; escriba el valor directamente");
+                return new ErrorEnlazado();
+        }
     }
 
     // ----- Conversiones -----

@@ -209,6 +209,8 @@ public static class EmisorIl
     /// <summary>Lo que el emisor ya definió, para que los cuerpos puedan referirse a ello.</summary>
     private sealed class Tabla
     {
+        private readonly Dictionary<TipoGenerico, Type> _genericos = new();
+
         public Dictionary<TipoUsuario, TypeBuilder> Tipos { get; } = new();
 
         public Dictionary<SimboloCampo, FieldBuilder> Campos { get; } = new();
@@ -217,8 +219,75 @@ public static class EmisorIl
 
         public Dictionary<TipoUsuario, ConstructorBuilder> Constructores { get; } = new();
 
-        /// <summary>El tipo de .NET de un tipo de Lince: fijo para los básicos, el TypeBuilder para los de usuario; un T? es el mismo que T.</summary>
-        public Type Clr(TipoLince tipo) => tipo.SinNulo is TipoUsuario usuario ? Tipos[usuario] : tipo.SinNulo.TipoClr;
+        /// <summary>
+        /// El tipo de .NET de un tipo de Lince: fijo para los básicos, el TypeBuilder para los de
+        /// usuario, <c>List&lt;&gt;</c> o <c>Dictionary&lt;,&gt;</c> construidos para las colecciones;
+        /// un T? es el mismo que T.
+        /// </summary>
+        public Type Clr(TipoLince tipo)
+        {
+            var sinNulo = tipo.SinNulo;
+            switch (sinNulo)
+            {
+                case TipoUsuario usuario:
+                    return Tipos[usuario];
+                case TipoGenerico generico:
+                    if (!_genericos.TryGetValue(generico, out var construido))
+                    {
+                        var abierto = generico.EsLista ? typeof(List<>) : typeof(Dictionary<,>);
+                        construido = abierto.MakeGenericType(generico.Argumentos.Select(Clr).ToArray());
+                        _genericos[generico] = construido;
+                    }
+
+                    return construido;
+                default:
+                    return sinNulo.TipoClr;
+            }
+        }
+
+        /// <summary>
+        /// Un método de un tipo genérico abierto (<c>List&lt;T&gt;.Add</c>) sobre su instancia
+        /// construida. Si la instancia incluye un tipo que aún se está construyendo hay que
+        /// pasar por <see cref="TypeBuilder.GetMethod(Type, MethodInfo)"/>; si no, por el handle.
+        /// Los métodos de tipos no genéricos (<c>String</c>, <c>Math</c>) se usan tal cual.
+        /// </summary>
+        public MethodInfo Metodo(Type construido, MethodInfo abierto)
+        {
+            if (!abierto.DeclaringType!.IsGenericTypeDefinition)
+            {
+                return abierto;
+            }
+
+            return TieneBuilder(construido)
+                ? TypeBuilder.GetMethod(construido, abierto)
+                : (MethodInfo)MethodBase.GetMethodFromHandle(abierto.MethodHandle, construido.TypeHandle)!;
+        }
+
+        public ConstructorInfo Constructor(Type construido, ConstructorInfo abierto) => TieneBuilder(construido)
+            ? TypeBuilder.GetConstructor(construido, abierto)
+            : (ConstructorInfo)MethodBase.GetMethodFromHandle(abierto.MethodHandle, construido.TypeHandle)!;
+
+        private static bool TieneBuilder(Type tipo) =>
+            tipo is TypeBuilder || (tipo.IsGenericType && !tipo.IsGenericTypeDefinition && tipo.GetGenericArguments().Any(TieneBuilder));
+    }
+
+    /// <summary>Miembros abiertos de las colecciones de .NET que emite el código generado.</summary>
+    private static class Colecciones
+    {
+        private static readonly Type T = typeof(List<>).GetGenericArguments()[0];
+        private static readonly Type K = typeof(Dictionary<,>).GetGenericArguments()[0];
+        private static readonly Type V = typeof(Dictionary<,>).GetGenericArguments()[1];
+
+        public static readonly ConstructorInfo ListaVacia = typeof(List<>).GetConstructor(Type.EmptyTypes)!;
+        public static readonly ConstructorInfo ListaDesde = typeof(List<>).GetConstructor([typeof(IEnumerable<>).MakeGenericType(T)])!;
+        public static readonly MethodInfo ListaAgregar = typeof(List<>).GetMethod(nameof(List<int>.Add), [T])!;
+        public static readonly MethodInfo ListaCantidad = typeof(List<>).GetProperty(nameof(List<int>.Count))!.GetMethod!;
+        public static readonly MethodInfo ListaLeer = typeof(List<>).GetMethod("get_Item", [typeof(int)])!;
+        public static readonly MethodInfo ListaEscribir = typeof(List<>).GetMethod("set_Item", [typeof(int), T])!;
+
+        public static readonly ConstructorInfo MapaVacio = typeof(Dictionary<,>).GetConstructor(Type.EmptyTypes)!;
+        public static readonly MethodInfo MapaLeer = typeof(Dictionary<,>).GetMethod("get_Item", [K])!;
+        public static readonly MethodInfo MapaEscribir = typeof(Dictionary<,>).GetMethod("set_Item", [K, V])!;
     }
 
     /// <summary>Miembros de .NET que el código generado llama. Se resuelven una vez.</summary>
@@ -349,6 +418,17 @@ public static class EmisorIl
                     EmitirPara(para);
                     break;
 
+                case ParaEnColeccionEnlazado para:
+                    EmitirParaEnColeccion(para);
+                    break;
+
+                case AsignacionIndiceEnlazada asignacion:
+                    EmitirExpresion(asignacion.Objeto);
+                    EmitirIndice(asignacion.Objeto.Tipo, asignacion.Indice);
+                    EmitirExpresion(asignacion.Valor);
+                    _il.Emit(OpCodes.Callvirt, MetodoDeColeccion(asignacion.Objeto.Tipo, Colecciones.ListaEscribir, Colecciones.MapaEscribir));
+                    break;
+
                 case RegresarEnlazado regresar:
                     if (regresar.Valor is not null)
                     {
@@ -447,6 +527,65 @@ public static class EmisorIl
             _il.MarkLabel(fin);
         }
 
+        /// <summary>
+        /// <c>para x en coleccion</c>: la colección se guarda una vez y se recorre por índice,
+        /// como <c>para i en 0..cantidad</c> con <c>x = coleccion[i]</c> al empezar cada vuelta.
+        /// </summary>
+        private void EmitirParaEnColeccion(ParaEnColeccionEnlazado para)
+        {
+            var tipoLista = para.Lista.Tipo;
+            var coleccion = Local(para.Coleccion);
+            var indice = Local(para.Indice);
+            var variable = Local(para.Variable);
+            var condicion = _il.DefineLabel();
+            var continuar = _il.DefineLabel();
+            var fin = _il.DefineLabel();
+
+            EmitirExpresion(para.Lista);
+            _il.Emit(OpCodes.Stloc, coleccion);
+            _il.Emit(OpCodes.Ldc_I8, 0L);
+            _il.Emit(OpCodes.Stloc, indice);
+
+            _il.MarkLabel(condicion);
+            _il.Emit(OpCodes.Ldloc, indice);
+            _il.Emit(OpCodes.Ldloc, coleccion);
+            _il.Emit(OpCodes.Callvirt, _tabla.Metodo(_tabla.Clr(tipoLista), Colecciones.ListaCantidad));
+            _il.Emit(OpCodes.Conv_I8);
+            _il.Emit(OpCodes.Bge, fin);
+
+            _il.Emit(OpCodes.Ldloc, coleccion);
+            _il.Emit(OpCodes.Ldloc, indice);
+            _il.Emit(OpCodes.Conv_I4);
+            _il.Emit(OpCodes.Callvirt, _tabla.Metodo(_tabla.Clr(tipoLista), Colecciones.ListaLeer));
+            _il.Emit(OpCodes.Stloc, variable);
+
+            _ciclos.Push((fin, continuar));
+            EmitirBloque(para.Cuerpo);
+            _ciclos.Pop();
+
+            _il.MarkLabel(continuar);
+            _il.Emit(OpCodes.Ldloc, indice);
+            _il.Emit(OpCodes.Ldc_I8, 1L);
+            _il.Emit(OpCodes.Add);
+            _il.Emit(OpCodes.Stloc, indice);
+            _il.Emit(OpCodes.Br, condicion);
+
+            _il.MarkLabel(fin);
+        }
+
+        /// <summary>Deja en la pila el índice como lo pide .NET: <c>int</c> para una lista, la clave tal cual para un mapa.</summary>
+        private void EmitirIndice(TipoLince coleccion, ExpresionEnlazada indice)
+        {
+            EmitirExpresion(indice);
+            if (coleccion.EsLista)
+            {
+                _il.Emit(OpCodes.Conv_I4);
+            }
+        }
+
+        private MethodInfo MetodoDeColeccion(TipoLince coleccion, MethodInfo deLista, MethodInfo deMapa) =>
+            _tabla.Metodo(_tabla.Clr(coleccion), coleccion.EsLista ? deLista : deMapa);
+
         private LocalBuilder Local(SimboloVariable variable)
         {
             if (!_locales.TryGetValue(variable, out var local))
@@ -494,6 +633,52 @@ public static class EmisorIl
                     }
 
                     _il.Emit(OpCodes.Newobj, _tabla.Constructores[nuevo.TipoUsuario]);
+                    break;
+
+                case ListaLiteralEnlazado lista:
+                    {
+                        var clr = _tabla.Clr(lista.TipoLista);
+                        _il.Emit(OpCodes.Newobj, _tabla.Constructor(clr, Colecciones.ListaVacia));
+                        var agregar = _tabla.Metodo(clr, Colecciones.ListaAgregar);
+                        foreach (var elemento in lista.Elementos)
+                        {
+                            _il.Emit(OpCodes.Dup);
+                            EmitirExpresion(elemento);
+                            _il.Emit(OpCodes.Callvirt, agregar);
+                        }
+
+                        break;
+                    }
+
+                case MapaLiteralEnlazado mapa:
+                    {
+                        var clr = _tabla.Clr(mapa.TipoMapa);
+                        _il.Emit(OpCodes.Newobj, _tabla.Constructor(clr, Colecciones.MapaVacio));
+                        var escribir = _tabla.Metodo(clr, Colecciones.MapaEscribir);
+                        foreach (var par in mapa.Pares)
+                        {
+                            _il.Emit(OpCodes.Dup);
+                            EmitirExpresion(par.Clave);
+                            EmitirExpresion(par.Valor);
+                            _il.Emit(OpCodes.Callvirt, escribir);
+                        }
+
+                        break;
+                    }
+
+                case NuevaColeccionEnlazada nueva:
+                    _il.Emit(OpCodes.Newobj, _tabla.Constructor(_tabla.Clr(nueva.TipoColeccion),
+                        nueva.TipoColeccion.EsLista ? Colecciones.ListaVacia : Colecciones.MapaVacio));
+                    break;
+
+                case IndiceEnlazado indice:
+                    EmitirExpresion(indice.Objeto);
+                    EmitirIndice(indice.Objeto.Tipo, indice.Indice);
+                    _il.Emit(OpCodes.Callvirt, MetodoDeColeccion(indice.Objeto.Tipo, Colecciones.ListaLeer, Colecciones.MapaLeer));
+                    break;
+
+                case MiembroIntegradoEnlazado integrado:
+                    EmitirMiembroIntegrado(integrado);
                     break;
 
                 case LlamadaMetodoEnlazada llamada:
@@ -552,6 +737,56 @@ public static class EmisorIl
 
                 default:
                     throw new InvalidOperationException($"Expresión no contemplada en la emisión: {expresion.GetType().Name}");
+            }
+        }
+
+        /// <summary>Un miembro integrado: el receptor, los argumentos ajustados, el extra que pida .NET, la llamada y el posproceso.</summary>
+        private void EmitirMiembroIntegrado(MiembroIntegradoEnlazado integrado)
+        {
+            var receta = integrado.Miembro.Receta;
+            EmitirExpresion(integrado.Objeto);
+
+            if (receta.Metodo is not null)
+            {
+                for (var i = 0; i < integrado.Argumentos.Length; i++)
+                {
+                    EmitirExpresion(integrado.Argumentos[i]);
+                    if (receta.ArgumentoAInt32(i))
+                    {
+                        _il.Emit(OpCodes.Conv_I4);
+                    }
+                }
+
+                switch (receta.Extra)
+                {
+                    case ArgumentoExtra.CulturaInvariante:
+                        _il.Emit(OpCodes.Call, Clr.CulturaInvariante);
+                        break;
+                    case ArgumentoExtra.ComparacionOrdinal:
+                        _il.Emit(OpCodes.Ldc_I4, (int)StringComparison.Ordinal);
+                        break;
+                    case ArgumentoExtra.OpcionesDeSplitNinguna:
+                        _il.Emit(OpCodes.Ldc_I4, (int)StringSplitOptions.None);
+                        break;
+                }
+
+                var metodo = _tabla.Metodo(_tabla.Clr(integrado.Objeto.Tipo), receta.Metodo);
+                _il.Emit(receta.EsEstatico ? OpCodes.Call : OpCodes.Callvirt, metodo);
+            }
+
+            switch (receta.Posproceso)
+            {
+                case Posproceso.AEntero64:
+                case Posproceso.AEnteroTruncando:
+                    _il.Emit(OpCodes.Conv_I8);
+                    break;
+                case Posproceso.ADecimal:
+                    _il.Emit(OpCodes.Conv_R8);
+                    break;
+                case Posproceso.ALista:
+                    // Lo que devolvió .NET (un arreglo, las claves, los valores) se copia a una lista nueva.
+                    _il.Emit(OpCodes.Newobj, _tabla.Constructor(_tabla.Clr(integrado.Tipo), Colecciones.ListaDesde));
+                    break;
             }
         }
 

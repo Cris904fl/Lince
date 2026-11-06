@@ -251,6 +251,8 @@ public sealed class AnalizadorLexico
             case ')': tipo = TipoToken.ParentesisCierra; break;
             case '{': tipo = TipoToken.LlaveAbre; break;
             case '}': tipo = TipoToken.LlaveCierra; break;
+            case '[': tipo = TipoToken.CorcheteAbre; break;
+            case ']': tipo = TipoToken.CorcheteCierra; break;
             case ',': tipo = TipoToken.Coma; break;
             case ';': tipo = TipoToken.PuntoYComa; break;
             case ':': tipo = TipoToken.DosPuntos; break;

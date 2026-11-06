@@ -64,6 +64,11 @@ public static class Codigos
     public const string MiembroDeNulable = "LN3042";
     public const string NuncaEsNulo = "LN3043";
     public const string NulableDeValor = "LN3044";
+    public const string ArgumentosDeTipo = "LN3045";
+    public const string ColeccionVaciaSinTipo = "LN3046";
+    public const string NoSePuedeIndexar = "LN3047";
+    public const string MiembroDeSoloLectura = "LN3048";
+    public const string NoSePuedeRecorrer = "LN3049";
 
     // Emisión y herramienta
     public const string ErrorDeEmision = "LN4001";

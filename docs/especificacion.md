@@ -1,7 +1,8 @@
 # Especificación del lenguaje Lince
 
-> Versión 0.2 (fase 2: objetos). Este documento es la referencia de la sintaxis y la semántica
-> que el compilador implementa hoy. Cada cambio al lenguaje se refleja aquí en el mismo trabajo.
+> Versión 0.3 (fase 3a: colecciones). Este documento es la referencia de la sintaxis y la
+> semántica que el compilador implementa hoy. Cada cambio al lenguaje se refleja aquí en el
+> mismo trabajo.
 
 Lince es un lenguaje de propósito general, de tipado estático, con palabras clave en español y
 sintaxis de llaves al estilo de C# y Go. Compila a ensamblados .NET (IL), así que corre sobre el
@@ -43,11 +44,11 @@ Estas palabras están reservadas y no pueden usarse como identificadores:
 | Control    | `si` `sino` `mientras` `para` `en` `regresar` `romper` `continuar`         |
 | Objetos    | `nuevo` `este`                                                             |
 | Literales  | `verdadero` `falso` `nulo`                                                 |
-| Tipos      | `entero` `decimal` `texto` `logico` `nada`                                 |
+| Tipos      | `entero` `decimal` `texto` `logico` `nada` `lista` `mapa`                  |
 
 Además quedan reservadas para fases siguientes, y hoy producen el error `LN2004` si se usan:
-`modulo`, `importar`, `segun`, `caso`, `intentar`, `capturar`, `lanzar`, `lista`, `mapa`,
-`interfaz`, `enumeracion`, `hereda`, `asincrono`, `esperar`.
+`modulo`, `importar`, `segun`, `caso`, `intentar`, `capturar`, `lanzar`, `interfaz`,
+`enumeracion`, `hereda`, `asincrono`, `esperar`.
 
 ### 1.4 Literales
 
@@ -70,7 +71,7 @@ Un literal `entero` que no cabe en 64 bits es un error (`LN1003`).
 ### 1.5 Signos y operadores
 
 ```
-( ) { } , ; : . .. ?
+( ) { } [ ] , ; : . .. ?
 + - * / %
 = += -= *= /= %=
 == != < <= > >=
@@ -88,7 +89,8 @@ declaracion_funcion  = [ modificador ] "funcion" ( identificador | "nuevo" )
                        "(" [ parametros ] ")" [ ":" tipo ] bloque ;
 parametros           = parametro { "," parametro } ;
 parametro            = identificador ":" tipo ;
-tipo                 = ( "entero" | "decimal" | "texto" | "logico" | "nada" | identificador ) [ "?" ] ;
+tipo                 = ( "entero" | "decimal" | "texto" | "logico" | "nada" | identificador
+                       | "lista" "<" tipo ">" | "mapa" "<" tipo "," tipo ">" ) [ "?" ] ;
 
 declaracion_tipo     = ( "clase" | "estructura" ) identificador "{" { miembro } "}" ;
 miembro              = campo | declaracion_funcion ;
@@ -109,10 +111,10 @@ sentencia            = declaracion_variable
 
 declaracion_variable = ( "sea" | "var" ) identificador [ ":" tipo ] "=" expresion ";" ;
 asignacion           = objetivo ( "=" | "+=" | "-=" | "*=" | "/=" | "%=" ) expresion ";" ;
-objetivo             = identificador | postfija "." identificador ;
+objetivo             = identificador | postfija "." identificador | postfija "[" expresion "]" ;
 sentencia_si         = "si" expresion bloque [ "sino" ( sentencia_si | bloque ) ] ;
 sentencia_mientras   = "mientras" expresion bloque ;
-sentencia_para       = "para" identificador "en" expresion ".." expresion bloque ;
+sentencia_para       = "para" identificador "en" expresion [ ".." expresion ] bloque ;
 sentencia_regresar   = "regresar" [ expresion ] ";" ;
 
 expresion            = o_logico ;
@@ -123,10 +125,13 @@ comparacion          = suma { ( "<" | "<=" | ">" | ">=" ) suma } ;
 suma                 = producto { ( "+" | "-" ) producto } ;
 producto             = unaria { ( "*" | "/" | "%" ) unaria } ;
 unaria               = ( "-" | "!" ) unaria | postfija ;
-postfija             = primaria { "(" [ argumentos ] ")" | "." identificador } ;
+postfija             = primaria { "(" [ argumentos ] ")" | "." identificador | "[" expresion "]" } ;
 argumentos           = expresion { "," expresion } ;
 primaria             = literal | identificador | "este" | "(" expresion ")"
-                     | "nuevo" identificador "(" [ argumentos ] ")" ;
+                     | "nuevo" tipo "(" [ argumentos ] ")"
+                     | "[" [ argumentos ] "]"
+                     | "{" [ par { "," par } ] "}" ;
+par                  = expresion ":" expresion ;
 ```
 
 Observaciones:
@@ -154,7 +159,8 @@ Observaciones:
 La hoja de ruta contempla un tipo de precisión decimal para dinero.
 
 A estos se suman los tipos que declara el programa: las **clases** (por referencia) y las
-**estructuras** (por valor), descritas en la sección 4.4. Se nombran por su identificador.
+**estructuras** (por valor), descritas en la sección 4.4, y las **colecciones** `lista<T>` y
+`mapa<K, V>` (sección 3.4), por referencia.
 
 ### 3.1 Conversiones implícitas
 
@@ -244,6 +250,97 @@ Reglas:
 
 Un `T?` que se sabe no nulo se puede guardar en una variable `T`, pasar a un parámetro `T` o
 regresar de una función `T`.
+
+### 3.4 Colecciones: `lista<T>` y `mapa<K, V>`
+
+```
+sea numeros = [5, 3, 9];               // lista<entero>, por el primer elemento
+sea nombres: lista<texto> = [];        // vacía: el tipo lo da la declaración
+sea edades = {"ana": 30, "eva": 41};   // mapa<texto, entero>
+sea porNombre = nuevo mapa<texto, Persona>();
+
+numeros.agregar(1);
+numeros[0] = numeros[1] * 2;
+edades["luis"] = 25;
+edades["ana"] += 1;
+
+para n en numeros { imprimir(n); }          // los elementos, en orden
+para nombre en edades { imprimir(nombre); } // las claves
+```
+
+- `lista<T>` es `List<T>` de .NET y `mapa<K, V>` es `Dictionary<K, V>`; son tipos por
+  referencia (dos variables pueden ser la misma lista) y admiten `?`. Los argumentos de tipo
+  son obligatorios (`LN3045`) y no pueden ser `nada`.
+- Un literal `[a, b, c]` toma el tipo de su primer elemento y convierte los demás a él
+  (`[1, 2.5]` es `lista<decimal>`; `[1, "dos"]` es error). Lo mismo con `{clave: valor}`
+  para las claves y los valores. Un literal vacío (`[]`, `{}`) solo se admite donde el
+  contexto dicta el tipo: la declaración de una variable con tipo, una asignación, un
+  argumento, un `regresar` o el valor inicial de un campo (`LN3046`); si no, use
+  `nuevo lista<T>()` o `nuevo mapa<K, V>()`.
+- `coleccion[indice]` lee y escribe. En una lista el índice es `entero` desde 0 y salirse
+  lanza la excepción de .NET; en un mapa la clave es de tipo `K` y leer una clave que no está
+  lanza también; compruebe con `contiene`. Solo las listas y los mapas se indexan (`LN3047`).
+- `para x en lista` recorre los elementos y `para k en mapa` las claves, en orden de
+  inserción. La colección se evalúa una sola vez. `romper` y `continuar` funcionan igual que
+  en el rango. Recorrer otra cosa es `LN3049`.
+- Las colecciones no se concatenan, no se imprimen y no se comparan con `==`.
+
+Miembros de `lista<T>`:
+
+| Miembro            | Tipo       | Qué hace                                  |
+| ------------------ | ---------- | ----------------------------------------- |
+| `cantidad`         | `entero`   | Cuántos elementos tiene (solo lectura)    |
+| `agregar(x)`       | `nada`     | Añade al final                            |
+| `insertar(i, x)`   | `nada`     | Inserta en la posición `i`                |
+| `quitarEn(i)`      | `nada`     | Quita el de la posición `i`               |
+| `quitar(x)`        | `logico`   | Quita la primera aparición; si la había   |
+| `contiene(x)`      | `logico`   |                                           |
+| `indiceDe(x)`      | `entero`   | Posición de la primera aparición, o -1    |
+| `limpiar()`        | `nada`     |                                           |
+
+Miembros de `mapa<K, V>`:
+
+| Miembro            | Tipo       | Qué hace                                  |
+| ------------------ | ---------- | ----------------------------------------- |
+| `cantidad`         | `entero`   |                                           |
+| `contiene(k)`      | `logico`   | Si la clave está                          |
+| `quitar(k)`        | `logico`   | Quita la clave; si estaba                 |
+| `limpiar()`        | `nada`     |                                           |
+| `claves()`         | `lista<K>` | Copia de las claves, en orden de inserción|
+| `valores()`        | `lista<V>` | Copia de los valores                      |
+
+Las propiedades (`cantidad`) se leen sin paréntesis y no se asignan (`LN3048`); los métodos se
+llaman con paréntesis. Un miembro que no existe es `LN3034`, y el mensaje lista los que hay.
+
+### 3.5 Miembros de `texto` y de los números
+
+Fachadas sobre `String` y `Math` de .NET. Las comparaciones y búsquedas son por caracteres
+(ordinales), sin reglas de idioma, y los números se convierten con la cultura invariante.
+
+| `texto`                     | Tipo           | Equivalente en .NET                    |
+| --------------------------- | -------------- | -------------------------------------- |
+| `longitud`                  | `entero`       | `Length`                               |
+| `mayusculas()` `minusculas()` | `texto`      | `ToUpperInvariant` `ToLowerInvariant`  |
+| `recortar()`                | `texto`        | `Trim`                                 |
+| `contiene(t)` `empiezaCon(t)` `terminaCon(t)` | `logico` | `Contains` `StartsWith` `EndsWith` |
+| `indiceDe(t)`               | `entero`       | `IndexOf`, -1 si no está               |
+| `reemplazar(buscado, reemplazo)` | `texto`   | `Replace`                              |
+| `subtexto(inicio, longitud)`| `texto`        | `Substring`                            |
+| `partir(separador)`         | `lista<texto>` | `Split`                                |
+| `aEntero()` `aDecimal()`    | `entero` `decimal` | `long.Parse` `double.Parse` (lanzan si no es un número) |
+
+| `entero`                    | Tipo       |
+| --------------------------- | ---------- |
+| `absoluto()`                | `entero`   |
+| `aDecimal()`                | `decimal`  |
+
+| `decimal`                   | Tipo       | Nota                                   |
+| --------------------------- | ---------- | -------------------------------------- |
+| `absoluto()` `redondear()` `piso()` `techo()` `raiz()` | `decimal` | `Math.Abs/Round/Floor/Ceiling/Sqrt` |
+| `potencia(exponente)`       | `decimal`  | `Math.Pow`                             |
+| `aEntero()`                 | `entero`   | Trunca hacia cero                      |
+
+Un literal numérico también los admite: `2.0.raiz()`, `(-7).absoluto()`.
 
 ## 4. Declaraciones
 
@@ -398,13 +495,16 @@ mientras i < 3 {
 
 ### 5.3 `para`
 
-Recorre un rango de enteros: desde el primer valor, inclusive, hasta el segundo, exclusivo. Los
-dos límites se evalúan una sola vez, antes de la primera vuelta, y deben ser `entero` (`LN3028`).
-La variable del ciclo es inmutable dentro del cuerpo.
+Recorre un rango de enteros (desde el primer valor, inclusive, hasta el segundo, exclusivo) o
+una colección (3.4). Los límites del rango se evalúan una sola vez, antes de la primera vuelta,
+y deben ser `entero` (`LN3028`). La variable del ciclo es inmutable dentro del cuerpo.
 
 ```
 para i en 0..5 {
     imprimir(i);   // 0 1 2 3 4
+}
+para nombre en ["ana", "eva"] {
+    imprimir(nombre);
 }
 ```
 
@@ -419,9 +519,9 @@ Termina la función. Lleva valor si y solo si la función no regresa `nada` (`LN
 
 ### 5.6 Sentencia de expresión
 
-Solo una llamada (a función o a método) o un `nuevo` pueden usarse como sentencia; cualquier
-otra expresión suelta es un error porque no tiene efecto (`LN3024`). El valor que devuelvan se
-descarta.
+Solo una llamada (a función, a método o a un método integrado) o un `nuevo` pueden usarse como
+sentencia; cualquier otra expresión suelta es un error porque no tiene efecto (`LN3024`). El
+valor que devuelvan se descarta.
 
 ## 6. Funciones integradas
 

@@ -36,13 +36,26 @@ Sin esto no se puede ni crear una app web ni un DataFrame.
 
 Lo que hace cómodo a Python: `datos.filtrar(f => f.edad > 30)`.
 
+**3a, colecciones (hecha, 2026-11-06):**
+
 - `lista<T>` sobre `List<T>` y `mapa<K, V>` sobre `Dictionary<K, V>`: literales
-  (`[1, 2, 3]`, `{"a": 1}`), indexación, `agregar`, `quitar`, `contiene`, `cantidad`.
-- `para elemento en coleccion { }` además del rango de enteros.
-- Lambdas (`x => x * 2`) y funciones como valores; genéricos solo para las colecciones
-  integradas, los de usuario quedan para después.
-- Métodos sobre tipos básicos (`longitud`, `mayusculas`, `contiene`, `redondear`) como fachada
-  sobre `System.String` y `System.Math`.
+  (`[1, 2, 3]`, `{"a": 1}`, vacíos con el tipo del contexto), `nuevo lista<T>()`, indexación
+  de lectura y escritura, `cantidad`, `agregar`, `insertar`, `quitar`, `quitarEn`, `contiene`,
+  `indiceDe`, `limpiar`, `claves`, `valores`.
+- `para elemento en lista { }` y `para clave en mapa { }` además del rango de enteros.
+- Métodos sobre tipos básicos como fachada sobre `String` y `Math`: `longitud`, `mayusculas`,
+  `minusculas`, `recortar`, `contiene`, `empiezaCon`, `terminaCon`, `indiceDe`, `reemplazar`,
+  `subtexto`, `partir`, `aEntero`, `aDecimal`; `absoluto`, `redondear`, `piso`, `techo`,
+  `raiz`, `potencia`.
+- Genéricos solo para las colecciones integradas; los de usuario quedan para la fase 9.
+
+**3b, funciones como valores (pendiente):**
+
+- Lambdas (`x => x * 2`, `(a, b) => { ... }`) y tipos función (`funcion(entero): logico`),
+  con clausuras sobre las variables locales. Se emiten como delegados `Func`/`Action` de .NET
+  y clases de cierre, igual que en C#.
+- Con ellas, los métodos de orden superior de `lista<T>`: `filtrar`, `transformar`, `ordenarPor`,
+  `alguno`, `todos`, `buscar`, `reducir`, `paraCada`.
 
 ## Fase 4: interoperabilidad con .NET y paquetes
 

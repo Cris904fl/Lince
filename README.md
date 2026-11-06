@@ -29,9 +29,11 @@ fib(9) = 34
 ```
 
 Hay clases y estructuras con campos, métodos, constructor, `este` y `privado`
-([ejemplos/cuentas.ln](ejemplos/cuentas.ln)), y tipos nulables con análisis de flujo: `Nodo?`
+([ejemplos/cuentas.ln](ejemplos/cuentas.ln)); tipos nulables con análisis de flujo: `Nodo?`
 puede ser `nulo` y solo se usa como `Nodo` tras comprobarlo
-([ejemplos/lista-enlazada.ln](ejemplos/lista-enlazada.ln)). La referencia completa del lenguaje está en
+([ejemplos/lista-enlazada.ln](ejemplos/lista-enlazada.ln)); y colecciones `lista<T>` y
+`mapa<K, V>` con literales, índices, `para x en coleccion` y métodos de texto y números sobre
+las clases de .NET ([ejemplos/inventario.ln](ejemplos/inventario.ln)). La referencia completa del lenguaje está en
 [docs/especificacion.md](docs/especificacion.md) y lo que viene, en
 [docs/hoja-de-ruta.md](docs/hoja-de-ruta.md).
 

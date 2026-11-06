@@ -88,14 +88,24 @@ public sealed record ParametroSintaxis(Token Nombre, Token DosPuntos, TipoSintax
 }
 
 /// <summary>
-/// Un nombre de tipo: una palabra clave (entero, decimal, texto, logico, nada) o el
-/// identificador de un tipo declarado, con un <c>?</c> opcional que lo hace nulable.
+/// Un nombre de tipo: una palabra clave (entero, decimal, texto, logico, nada), una colección
+/// con sus argumentos (<c>lista&lt;entero&gt;</c>, <c>mapa&lt;texto, Cuenta&gt;</c>) o el identificador
+/// de un tipo declarado, con un <c>?</c> opcional que lo hace nulable.
 /// </summary>
-public sealed record TipoSintaxis(Token Palabra, Token? Interrogacion = null) : NodoSintaxis
+public sealed record TipoSintaxis(
+    Token Palabra,
+    ImmutableArray<TipoSintaxis> Argumentos,
+    Token? Cierre = null,
+    Token? Interrogacion = null) : NodoSintaxis
 {
+    public TipoSintaxis(Token palabra)
+        : this(palabra, [])
+    {
+    }
+
     public bool EsNulable => Interrogacion is not null;
 
-    public override Ubicacion Ubicacion => Interrogacion is null ? Palabra.Ubicacion : Ubicacion.Entre(Palabra.Ubicacion, Interrogacion.Ubicacion);
+    public override Ubicacion Ubicacion => Ubicacion.Entre(Palabra.Ubicacion, (Interrogacion ?? Cierre ?? Palabra).Ubicacion);
 }
 
 // ----- Sentencias -----
@@ -146,16 +156,21 @@ public sealed record MientrasSintaxis(Token PalabraMientras, ExpresionSintaxis C
     public override Ubicacion Ubicacion => Ubicacion.Entre(PalabraMientras.Ubicacion, Cuerpo.Ubicacion);
 }
 
-/// <summary><c>para i en desde..hasta { }</c>.</summary>
+/// <summary>
+/// <c>para i en desde..hasta { }</c> (rango de enteros) o <c>para x en coleccion { }</c>
+/// (elementos de una lista o claves de un mapa). Es rango si hay <see cref="PuntoPunto"/>.
+/// </summary>
 public sealed record ParaSintaxis(
     Token PalabraPara,
     Token Variable,
     Token PalabraEn,
     ExpresionSintaxis Desde,
-    Token PuntoPunto,
-    ExpresionSintaxis Hasta,
+    Token? PuntoPunto,
+    ExpresionSintaxis? Hasta,
     BloqueSintaxis Cuerpo) : SentenciaSintaxis
 {
+    public bool EsRango => PuntoPunto is not null;
+
     public override Ubicacion Ubicacion => Ubicacion.Entre(PalabraPara.Ubicacion, Cuerpo.Ubicacion);
 }
 
@@ -231,13 +246,36 @@ public sealed record MiembroSintaxis(ExpresionSintaxis Objeto, Token Punto, Toke
     public override Ubicacion Ubicacion => Ubicacion.Entre(Objeto.Ubicacion, Nombre.Ubicacion);
 }
 
-/// <summary><c>nuevo Tipo(argumentos)</c>.</summary>
+/// <summary><c>nuevo Tipo(argumentos)</c>, también <c>nuevo lista&lt;entero&gt;()</c>.</summary>
 public sealed record NuevoSintaxis(
     Token PalabraNuevo,
-    Token Tipo,
+    TipoSintaxis Tipo,
     Token ParentesisAbre,
     ImmutableArray<ExpresionSintaxis> Argumentos,
     Token ParentesisCierra) : ExpresionSintaxis
 {
     public override Ubicacion Ubicacion => Ubicacion.Entre(PalabraNuevo.Ubicacion, ParentesisCierra.Ubicacion);
+}
+
+/// <summary><c>[1, 2, 3]</c>: una lista con esos elementos.</summary>
+public sealed record ListaLiteralSintaxis(Token CorcheteAbre, ImmutableArray<ExpresionSintaxis> Elementos, Token CorcheteCierra) : ExpresionSintaxis
+{
+    public override Ubicacion Ubicacion => Ubicacion.Entre(CorcheteAbre.Ubicacion, CorcheteCierra.Ubicacion);
+}
+
+/// <summary><c>{"a": 1, "b": 2}</c>: un mapa con esos pares.</summary>
+public sealed record MapaLiteralSintaxis(Token LlaveAbre, ImmutableArray<ParSintaxis> Pares, Token LlaveCierra) : ExpresionSintaxis
+{
+    public override Ubicacion Ubicacion => Ubicacion.Entre(LlaveAbre.Ubicacion, LlaveCierra.Ubicacion);
+}
+
+public sealed record ParSintaxis(ExpresionSintaxis Clave, Token DosPuntos, ExpresionSintaxis Valor) : NodoSintaxis
+{
+    public override Ubicacion Ubicacion => Ubicacion.Entre(Clave.Ubicacion, Valor.Ubicacion);
+}
+
+/// <summary><c>objeto[indice]</c>: un elemento de una lista o el valor de una clave de un mapa.</summary>
+public sealed record IndiceSintaxis(ExpresionSintaxis Objeto, Token CorcheteAbre, ExpresionSintaxis Indice, Token CorcheteCierra) : ExpresionSintaxis
+{
+    public override Ubicacion Ubicacion => Ubicacion.Entre(Objeto.Ubicacion, CorcheteCierra.Ubicacion);
 }

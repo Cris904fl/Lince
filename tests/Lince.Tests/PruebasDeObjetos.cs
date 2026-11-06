@@ -87,7 +87,7 @@ public class PruebasDeObjetos : IDisposable
         Assert.Empty(arbol.Diagnosticos);
         var sentencias = arbol.Raiz.Funciones[0].Cuerpo.Sentencias;
         var nuevo = Assert.IsType<NuevoSintaxis>(Assert.IsType<DeclaracionVariableSintaxis>(sentencias[0]).Valor);
-        Assert.Equal("Cuenta", nuevo.Tipo.Texto);
+        Assert.Equal("Cuenta", nuevo.Tipo.Palabra.Texto);
         Assert.Equal(2, nuevo.Argumentos.Length);
 
         var asignacion = Assert.IsType<AsignacionSintaxis>(sentencias[1]);
@@ -194,7 +194,7 @@ public class PruebasDeObjetos : IDisposable
     [Theory]
     [InlineData("sea c = nuevo Cuenta(\"a\"); imprimir(c.nombre);", "no tiene un campo llamado 'nombre'")]
     [InlineData("sea c = nuevo Cuenta(\"a\"); c.cerrar();", "no tiene un método llamado 'cerrar'")]
-    [InlineData("sea t = \"x\"; imprimir(t.longitud);", "no tiene campos")]
+    [InlineData("sea t = \"x\"; imprimir(t.tamano);", "no tiene un miembro llamado 'tamano'")]
     public void Miembro_inexistente_es_LN3034(string cuerpo, string mensaje)
     {
         var error = UnicoError(cuerpo);

@@ -36,6 +36,8 @@ public static class Palabras
         ["este"] = TipoToken.PalabraEste,
         ["privado"] = TipoToken.PalabraPrivado,
         ["publico"] = TipoToken.PalabraPublico,
+        ["lista"] = TipoToken.PalabraLista,
+        ["mapa"] = TipoToken.PalabraMapa,
     }.ToFrozenDictionary();
 
     /// <summary>
@@ -44,7 +46,7 @@ public static class Palabras
     /// </summary>
     private static readonly FrozenSet<string> _reservadas = new[]
     {
-        "modulo", "importar", "segun", "caso", "intentar", "capturar", "lanzar", "lista", "mapa",
+        "modulo", "importar", "segun", "caso", "intentar", "capturar", "lanzar",
         "interfaz", "enumeracion", "hereda", "asincrono", "esperar",
     }.ToFrozenSet();
 
@@ -59,7 +61,8 @@ public static class Palabras
     }
 
     public static bool EsTipo(TipoToken tipo) => tipo is TipoToken.PalabraEntero or TipoToken.PalabraDecimal
-        or TipoToken.PalabraTexto or TipoToken.PalabraLogico or TipoToken.PalabraNada;
+        or TipoToken.PalabraTexto or TipoToken.PalabraLogico or TipoToken.PalabraNada
+        or TipoToken.PalabraLista or TipoToken.PalabraMapa;
 
     /// <summary>Texto fijo de un token, para sintetizarlo o describirlo en un mensaje.</summary>
     public static string TextoFijo(TipoToken tipo) => tipo switch
@@ -68,6 +71,8 @@ public static class Palabras
         TipoToken.ParentesisCierra => ")",
         TipoToken.LlaveAbre => "{",
         TipoToken.LlaveCierra => "}",
+        TipoToken.CorcheteAbre => "[",
+        TipoToken.CorcheteCierra => "]",
         TipoToken.Coma => ",",
         TipoToken.PuntoYComa => ";",
         TipoToken.DosPuntos => ":",

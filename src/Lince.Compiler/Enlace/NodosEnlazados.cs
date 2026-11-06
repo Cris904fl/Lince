@@ -51,6 +51,20 @@ public sealed record ParaEnlazado(
     ExpresionEnlazada Hasta,
     BloqueEnlazado Cuerpo) : SentenciaEnlazada;
 
+/// <summary>
+/// <c>para x en coleccion { }</c>. La colección se guarda una vez en <paramref name="Coleccion"/>
+/// y se recorre por índice (<paramref name="Indice"/>); en un mapa, la colección es su lista de claves.
+/// </summary>
+public sealed record ParaEnColeccionEnlazado(
+    SimboloVariable Variable,
+    SimboloVariable Coleccion,
+    SimboloVariable Indice,
+    ExpresionEnlazada Lista,
+    BloqueEnlazado Cuerpo) : SentenciaEnlazada;
+
+/// <summary><c>coleccion[indice] = valor;</c>.</summary>
+public sealed record AsignacionIndiceEnlazada(ExpresionEnlazada Objeto, ExpresionEnlazada Indice, ExpresionEnlazada Valor) : SentenciaEnlazada;
+
 public sealed record RegresarEnlazado(ExpresionEnlazada? Valor) : SentenciaEnlazada;
 
 public sealed record RomperEnlazado : SentenciaEnlazada;
@@ -92,6 +106,38 @@ public sealed record CampoEnlazado(ExpresionEnlazada Objeto, SimboloCampo Campo)
 public sealed record NuevoEnlazado(TipoUsuario TipoUsuario, ImmutableArray<ExpresionEnlazada> Argumentos) : ExpresionEnlazada
 {
     public override TipoLince Tipo => TipoUsuario;
+}
+
+/// <summary><c>[1, 2, 3]</c>, ya con el tipo de la lista y los elementos convertidos a su tipo de elemento.</summary>
+public sealed record ListaLiteralEnlazado(TipoGenerico TipoLista, ImmutableArray<ExpresionEnlazada> Elementos) : ExpresionEnlazada
+{
+    public override TipoLince Tipo => TipoLista;
+}
+
+public sealed record ParEnlazado(ExpresionEnlazada Clave, ExpresionEnlazada Valor) : NodoEnlazado;
+
+/// <summary><c>{"a": 1}</c>, ya con el tipo del mapa y las claves y valores convertidos.</summary>
+public sealed record MapaLiteralEnlazado(TipoGenerico TipoMapa, ImmutableArray<ParEnlazado> Pares) : ExpresionEnlazada
+{
+    public override TipoLince Tipo => TipoMapa;
+}
+
+/// <summary><c>nuevo lista&lt;T&gt;()</c> o <c>nuevo mapa&lt;K, V&gt;()</c>: una colección vacía.</summary>
+public sealed record NuevaColeccionEnlazada(TipoGenerico TipoColeccion) : ExpresionEnlazada
+{
+    public override TipoLince Tipo => TipoColeccion;
+}
+
+/// <summary><c>coleccion[indice]</c>. El índice ya viene convertido (entero en listas, la clave en mapas).</summary>
+public sealed record IndiceEnlazado(ExpresionEnlazada Objeto, ExpresionEnlazada Indice, TipoLince Tipo) : ExpresionEnlazada
+{
+    public override TipoLince Tipo { get; } = Tipo;
+}
+
+/// <summary>Un campo de solo lectura o un método de un tipo integrado (<c>texto.longitud</c>, <c>lista.agregar(x)</c>).</summary>
+public sealed record MiembroIntegradoEnlazado(ExpresionEnlazada Objeto, MiembroIntegrado Miembro, ImmutableArray<ExpresionEnlazada> Argumentos) : ExpresionEnlazada
+{
+    public override TipoLince Tipo => Miembro.TipoRetorno;
 }
 
 /// <summary>Llamada a un método sobre un objeto: <c>objeto.metodo(argumentos)</c>.</summary>

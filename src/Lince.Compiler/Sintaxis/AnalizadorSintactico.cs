@@ -196,8 +196,31 @@ public sealed class AnalizadorSintactico
         if (Palabras.EsTipo(Actual.Tipo) || Actual.Tipo == TipoToken.Identificador)
         {
             var palabra = Avanzar();
+            var argumentos = ImmutableArray<TipoSintaxis>.Empty;
+            Token? cierre = null;
+
+            // Los argumentos de tipo: lista<entero>, mapa<texto, Cuenta>. El enlazador comprueba cuántos van.
+            if (Actual.Tipo == TipoToken.Menor && (palabra.Tipo is TipoToken.PalabraLista or TipoToken.PalabraMapa or TipoToken.Identificador))
+            {
+                Avanzar();
+                var lista = ImmutableArray.CreateBuilder<TipoSintaxis>();
+                while (true)
+                {
+                    lista.Add(AnalizarTipo());
+                    if (Actual.Tipo != TipoToken.Coma)
+                    {
+                        break;
+                    }
+
+                    Avanzar();
+                }
+
+                argumentos = lista.ToImmutable();
+                cierre = Coincidir(TipoToken.Mayor);
+            }
+
             var interrogacion = Actual.Tipo == TipoToken.Interrogacion ? Avanzar() : null;
-            return new TipoSintaxis(palabra, interrogacion);
+            return new TipoSintaxis(palabra, argumentos, cierre, interrogacion);
         }
 
         Informar(Codigos.SeEsperabaTipo,
@@ -388,10 +411,10 @@ public sealed class AnalizadorSintactico
             return new ExpresionSentenciaSintaxis(expresion, Coincidir(TipoToken.PuntoYComa));
         }
 
-        if (expresion is not (NombreSintaxis or MiembroSintaxis))
+        if (expresion is not (NombreSintaxis or MiembroSintaxis or IndiceSintaxis))
         {
             _diagnosticos.Error(Codigos.ObjetivoDeAsignacionInvalido, expresion.Ubicacion,
-                "el lado izquierdo de una asignación debe ser una variable o un campo (objeto.campo)");
+                "el lado izquierdo de una asignación debe ser una variable, un campo (objeto.campo) o un elemento (coleccion[indice])");
         }
 
         var operador = Avanzar();
@@ -431,8 +454,15 @@ public sealed class AnalizadorSintactico
         var variable = Coincidir(TipoToken.Identificador);
         var palabraEn = Coincidir(TipoToken.PalabraEn);
         var desde = AnalizarExpresion();
-        var puntoPunto = Coincidir(TipoToken.PuntoPunto);
-        var hasta = AnalizarExpresion();
+
+        Token? puntoPunto = null;
+        ExpresionSintaxis? hasta = null;
+        if (Actual.Tipo == TipoToken.PuntoPunto)
+        {
+            puntoPunto = Avanzar();
+            hasta = AnalizarExpresion();
+        }
+
         var cuerpo = AnalizarBloque();
         return new ParaSintaxis(palabraPara, variable, palabraEn, desde, puntoPunto, hasta, cuerpo);
     }
@@ -514,6 +544,13 @@ public sealed class AnalizadorSintactico
                 var nombre = Coincidir(TipoToken.Identificador);
                 expresion = new MiembroSintaxis(expresion, punto, nombre);
             }
+            else if (Actual.Tipo == TipoToken.CorcheteAbre)
+            {
+                var abre = Avanzar();
+                var indice = AnalizarExpresion();
+                var cierra = Coincidir(TipoToken.CorcheteCierra);
+                expresion = new IndiceSintaxis(expresion, abre, indice, cierra);
+            }
             else
             {
                 return expresion;
@@ -565,13 +602,52 @@ public sealed class AnalizadorSintactico
             case TipoToken.PalabraNuevo:
                 {
                     var palabra = Avanzar();
-                    var tipo = Actual.Tipo == TipoToken.Identificador || Palabras.EsTipo(Actual.Tipo)
-                        ? Avanzar()
-                        : Coincidir(TipoToken.Identificador);
+                    var tipo = AnalizarTipo();
                     var abre = Coincidir(TipoToken.ParentesisAbre);
                     var argumentos = AnalizarArgumentos();
                     var cierra = Coincidir(TipoToken.ParentesisCierra);
                     return new NuevoSintaxis(palabra, tipo, abre, argumentos, cierra);
+                }
+
+            case TipoToken.CorcheteAbre:
+                {
+                    var abre = Avanzar();
+                    var elementos = ImmutableArray.CreateBuilder<ExpresionSintaxis>();
+                    while (Actual.Tipo is not (TipoToken.CorcheteCierra or TipoToken.FinDeArchivo))
+                    {
+                        elementos.Add(AnalizarExpresion());
+                        if (Actual.Tipo != TipoToken.Coma)
+                        {
+                            break;
+                        }
+
+                        Avanzar();
+                    }
+
+                    var cierra = Coincidir(TipoToken.CorcheteCierra);
+                    return new ListaLiteralSintaxis(abre, elementos.ToImmutable(), cierra);
+                }
+
+            case TipoToken.LlaveAbre:
+                {
+                    var abre = Avanzar();
+                    var pares = ImmutableArray.CreateBuilder<ParSintaxis>();
+                    while (Actual.Tipo is not (TipoToken.LlaveCierra or TipoToken.FinDeArchivo))
+                    {
+                        var clave = AnalizarExpresion();
+                        var dosPuntos = Coincidir(TipoToken.DosPuntos);
+                        var valor = AnalizarExpresion();
+                        pares.Add(new ParSintaxis(clave, dosPuntos, valor));
+                        if (Actual.Tipo != TipoToken.Coma)
+                        {
+                            break;
+                        }
+
+                        Avanzar();
+                    }
+
+                    var cierra = Coincidir(TipoToken.LlaveCierra);
+                    return new MapaLiteralSintaxis(abre, pares.ToImmutable(), cierra);
                 }
 
             case TipoToken.ParentesisAbre:
