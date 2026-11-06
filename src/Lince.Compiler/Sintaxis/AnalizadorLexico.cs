@@ -270,6 +270,7 @@ public sealed class AnalizadorLexico
             case '%' when s == '=': _posicion++; tipo = TipoToken.PorcentajeIgual; break;
             case '%': tipo = TipoToken.Porcentaje; break;
             case '=' when s == '=': _posicion++; tipo = TipoToken.IgualIgual; break;
+            case '=' when s == '>': _posicion++; tipo = TipoToken.Flecha; break;
             case '=': tipo = TipoToken.Igual; break;
             case '!' when s == '=': _posicion++; tipo = TipoToken.Distinto; break;
             case '!': tipo = TipoToken.Negacion; break;

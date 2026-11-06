@@ -14,7 +14,18 @@ public sealed record ProgramaEnlazado(
     ImmutableArray<TipoEnlazado> Tipos,
     SimboloFuncion? Principal) : NodoEnlazado;
 
-public sealed record FuncionEnlazada(SimboloFuncion Simbolo, BloqueEnlazado Cuerpo) : NodoEnlazado;
+/// <param name="Lambdas">Las lambdas que contiene el cuerpo y lo que capturan; null si no hay ninguna.</param>
+public sealed record FuncionEnlazada(SimboloFuncion Simbolo, BloqueEnlazado Cuerpo, InfoDeLambdas? Lambdas = null) : NodoEnlazado;
+
+/// <summary>
+/// Lo que el emisor necesita saber de las lambdas de un cuerpo: cuáles son (en orden de
+/// aparición, incluidas las anidadas), qué variables del cuerpo capturan y si capturan
+/// <c>este</c>. Con capturas, todas van a una clase de cierre; sin ellas, son métodos estáticos.
+/// </summary>
+public sealed record InfoDeLambdas(ImmutableArray<LambdaEnlazada> Lambdas, ImmutableArray<SimboloVariable> Capturadas, bool CapturaEste)
+{
+    public bool NecesitaCierre => Capturadas.Length > 0 || CapturaEste;
+}
 
 /// <summary>Una clase o estructura con sus valores iniciales de campo, su constructor (si es explícito) y sus métodos.</summary>
 public sealed record TipoEnlazado(
@@ -138,6 +149,24 @@ public sealed record IndiceEnlazado(ExpresionEnlazada Objeto, ExpresionEnlazada 
 public sealed record MiembroIntegradoEnlazado(ExpresionEnlazada Objeto, MiembroIntegrado Miembro, ImmutableArray<ExpresionEnlazada> Argumentos) : ExpresionEnlazada
 {
     public override TipoLince Tipo => Miembro.TipoRetorno;
+}
+
+/// <summary>Una lambda ya enlazada: su firma como símbolo, su cuerpo (siempre un bloque) y su tipo función.</summary>
+public sealed record LambdaEnlazada(SimboloFuncion Simbolo, BloqueEnlazado Cuerpo, TipoFuncion TipoFuncion) : ExpresionEnlazada
+{
+    public override TipoLince Tipo => TipoFuncion;
+}
+
+/// <summary>Una función libre usada como valor: <c>numeros.transformar(doble)</c>.</summary>
+public sealed record ReferenciaFuncionEnlazada(SimboloFuncion Funcion, TipoFuncion TipoFuncion) : ExpresionEnlazada
+{
+    public override TipoLince Tipo => TipoFuncion;
+}
+
+/// <summary>Llamada a un valor de tipo función: <c>f(1, 2)</c> donde <c>f</c> es una variable, parámetro o campo.</summary>
+public sealed record InvocacionEnlazada(ExpresionEnlazada Funcion, ImmutableArray<ExpresionEnlazada> Argumentos) : ExpresionEnlazada
+{
+    public override TipoLince Tipo => ((TipoFuncion)Funcion.Tipo).Retorno;
 }
 
 /// <summary>Llamada a un método sobre un objeto: <c>objeto.metodo(argumentos)</c>.</summary>

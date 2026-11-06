@@ -33,6 +33,16 @@ public sealed class Enlazador
     /// </summary>
     private ImmutableHashSet<string> _noNulos = [];
 
+    // Estado de las lambdas del cuerpo que se está enlazando: cuántas lambdas envuelven el
+    // punto actual, a qué profundidad se declaró cada variable (para saber si una lambda la
+    // captura), y lo acumulado para el emisor.
+    private int _profundidadDeLambda;
+    private readonly Dictionary<SimboloVariable, int> _profundidadDeVariable = new();
+    private readonly List<SimboloVariable> _capturadas = [];
+    private bool _capturaEste;
+    private readonly List<LambdaEnlazada> _lambdas = [];
+    private int _contadorDeLambdas;
+
     private Enlazador(BolsaDiagnosticos diagnosticos)
     {
         _diagnosticos = diagnosticos;
@@ -290,6 +300,22 @@ public sealed class Enlazador
             return ResolverColeccion(tipo);
         }
 
+        if (tipo.EsFuncion)
+        {
+            var parametros = tipo.Argumentos.Select(ResolverTipo).ToImmutableArray();
+            foreach (var (parametro, sintaxis) in parametros.Zip(tipo.Argumentos))
+            {
+                if (ReferenceEquals(parametro, TipoLince.Nada))
+                {
+                    _diagnosticos.Error(Codigos.TipoIncompatible, sintaxis.Ubicacion, "un parámetro no puede ser de tipo 'nada'");
+                    return TipoLince.Error;
+                }
+            }
+
+            var retorno = tipo.Retorno is null ? TipoLince.Nada : ResolverTipo(tipo.Retorno);
+            return parametros.Any(p => p.EsError) || retorno.EsError ? TipoLince.Error : TipoLince.Funcion(parametros, retorno);
+        }
+
         if (tipo.Argumentos.Length > 0)
         {
             _diagnosticos.Error(Codigos.ArgumentosDeTipo, tipo.Ubicacion,
@@ -377,11 +403,18 @@ public sealed class Enlazador
         _tipoActual = simbolo.TipoContenedor;
         _profundidadDeCiclo = 0;
         _noNulos = [];
+        _profundidadDeLambda = 0;
+        _profundidadDeVariable.Clear();
+        _capturadas.Clear();
+        _capturaEste = false;
+        _lambdas.Clear();
+        _contadorDeLambdas = 0;
         _ambito = new Ambito(null);
         foreach (var parametro in simbolo.Parametros)
         {
             // Si hay parámetros duplicados ya se informó; el primero gana.
             _ambito.Declarar(parametro);
+            _profundidadDeVariable[parametro] = 0;
         }
 
         var cuerpo = EnlazarBloque(declaracion.Cuerpo);
@@ -394,8 +427,209 @@ public sealed class Enlazador
 
         _funcionActual = null;
         _tipoActual = null;
-        return new FuncionEnlazada(simbolo, cuerpo);
+        var lambdas = _lambdas.Count == 0 ? null : new InfoDeLambdas([.. _lambdas], [.. _capturadas], _capturaEste);
+        return new FuncionEnlazada(simbolo, cuerpo, lambdas);
     }
+
+    // ----- Lambdas y capturas -----
+
+    /// <summary>Al usar una variable: si se declaró fuera de la lambda que la usa, la lambda la captura.</summary>
+    private void UsarVariable(SimboloVariable variable)
+    {
+        if (_profundidadDeLambda > 0 && _profundidadDeVariable.TryGetValue(variable, out var profundidad)
+            && profundidad < _profundidadDeLambda && !_capturadas.Contains(variable))
+        {
+            _capturadas.Add(variable);
+        }
+    }
+
+    /// <summary><c>este</c> en el punto actual; dentro de una lambda queda capturado.</summary>
+    private EsteEnlazado CrearEste()
+    {
+        if (_profundidadDeLambda > 0)
+        {
+            _capturaEste = true;
+        }
+
+        return new EsteEnlazado(_tipoActual!);
+    }
+
+    /// <summary>
+    /// Una lambda. Los tipos de sus parámetros vienen escritos o del contexto (el parámetro al
+    /// que se pasa); el de retorno, escrito, del contexto o, con cuerpo de expresión, de la
+    /// propia expresión. El cuerpo se enlaza como una función aparte: sus 'regresar' son suyos,
+    /// 'romper' no sale de un ciclo exterior y lo sabido sobre nulos no entra, porque la lambda
+    /// puede correr en cualquier momento.
+    /// </summary>
+    private ExpresionEnlazada EnlazarLambda(LambdaSintaxis lambda, ImmutableArray<TipoLince>? parametrosEsperados, TipoLince? retornoEsperado)
+    {
+        if (_funcionActual is null)
+        {
+            _diagnosticos.Error(Codigos.LambdaEnCampo, lambda.Flecha.Ubicacion,
+                "una lambda no puede ir en el valor inicial de un campo; asígnela en el constructor o en un método");
+            return new ErrorEnlazado();
+        }
+
+        if (parametrosEsperados is { } esperados && esperados.Length != lambda.Parametros.Length)
+        {
+            var cuantos = esperados.Length == 1 ? "1 parámetro" : $"{esperados.Length} parámetros";
+            _diagnosticos.Error(Codigos.ParametrosDeLambda, lambda.Flecha.Ubicacion,
+                $"aquí se espera una función de {cuantos} ({string.Join(", ", esperados.Select(p => p.Nombre))}) y la lambda tiene {lambda.Parametros.Length}");
+            return new ErrorEnlazado();
+        }
+
+        // Parámetros.
+        var parametros = ImmutableArray.CreateBuilder<SimboloVariable>(lambda.Parametros.Length);
+        var hayError = false;
+        for (var i = 0; i < lambda.Parametros.Length; i++)
+        {
+            var parametro = lambda.Parametros[i];
+            TipoLince tipo;
+            if (parametro.Tipo is not null)
+            {
+                tipo = ResolverTipo(parametro.Tipo);
+                if (parametrosEsperados is { } tipos && !tipo.EsError && !tipos[i].EsError && !ReferenceEquals(tipo, tipos[i]))
+                {
+                    _diagnosticos.Error(Codigos.TipoIncompatible, parametro.Tipo.Ubicacion,
+                        $"el parámetro '{parametro.Nombre.Texto}' de la lambda es '{tipo}' y aquí se espera '{tipos[i]}'");
+                    tipo = TipoLince.Error;
+                }
+            }
+            else if (parametrosEsperados is { } tipos)
+            {
+                tipo = tipos[i];
+            }
+            else
+            {
+                _diagnosticos.Error(Codigos.LambdaSinTipos, parametro.Nombre.Ubicacion,
+                    $"no se puede saber el tipo de '{parametro.Nombre.Texto}'; escríbalo: ({parametro.Nombre.Texto}: entero) => ...");
+                tipo = TipoLince.Error;
+            }
+
+            hayError |= tipo.EsError;
+            parametros.Add(new SimboloVariable(parametro.Nombre.Texto, tipo, esMutable: false, ClaseDeVariable.Parametro, i));
+        }
+
+        // Tipo de retorno conocido de antemano, si lo hay. Un bloque sin ningún 'regresar valor' regresa nada.
+        TipoLince? retorno = lambda.TipoRetorno is not null ? ResolverTipo(lambda.TipoRetorno) : retornoEsperado;
+        if (lambda.CuerpoBloque is not null && retorno is null)
+        {
+            if (ContieneRegresarConValor(lambda.CuerpoBloque))
+            {
+                _diagnosticos.Error(Codigos.LambdaSinRetorno, lambda.Flecha.Ubicacion,
+                    "una lambda con cuerpo entre llaves que regresa un valor necesita su tipo de retorno: (x: entero): entero => { ... }");
+                return new ErrorEnlazado();
+            }
+
+            retorno = TipoLince.Nada;
+        }
+
+        // El cuerpo se enlaza como una función aparte.
+        var nombre = $"<lambda>{++_contadorDeLambdas}";
+        var provisional = new SimboloFuncion(nombre, parametros.ToImmutable(), retorno ?? TipoLince.Nada, null);
+        var funcionExterior = _funcionActual;
+        var ciclosExteriores = _profundidadDeCiclo;
+        var noNulosExteriores = _noNulos;
+        var ambitoExterior = _ambito;
+
+        _funcionActual = provisional;
+        _profundidadDeCiclo = 0;
+        _noNulos = [];
+        _profundidadDeLambda++;
+        _ambito = new Ambito(ambitoExterior);
+        foreach (var parametro in provisional.Parametros)
+        {
+            if (!_ambito.Declarar(parametro))
+            {
+                _diagnosticos.Error(Codigos.VariableDuplicada, lambda.Parametros[parametro.IndiceDeParametro].Nombre.Ubicacion,
+                    $"ya existe una variable llamada '{parametro.Nombre}' en este ámbito o en uno que lo contiene");
+            }
+
+            _profundidadDeVariable[parametro] = _profundidadDeLambda;
+        }
+
+        BloqueEnlazado cuerpo;
+        if (lambda.CuerpoBloque is not null)
+        {
+            cuerpo = EnlazarBloque(lambda.CuerpoBloque);
+            if (!ReferenceEquals(retorno, TipoLince.Nada) && !retorno!.EsError && !Termina(cuerpo))
+            {
+                _diagnosticos.Error(Codigos.NoTodosLosCaminosRegresan, lambda.Flecha.Ubicacion,
+                    $"la lambda regresa '{retorno}' pero no todos los caminos llevan a un 'regresar'");
+            }
+        }
+        else
+        {
+            var expresion = EnlazarExpresion(lambda.CuerpoExpresion!, retorno);
+            if (retorno is null)
+            {
+                // Se infiere de la expresión: un valor, o nada si es una llamada sin valor.
+                retorno = ReferenceEquals(expresion.Tipo, TipoLince.Nulo) ? TipoLince.Error : expresion.Tipo;
+                if (ReferenceEquals(expresion.Tipo, TipoLince.Nulo))
+                {
+                    _diagnosticos.Error(Codigos.NoSePuedeInferir, lambda.CuerpoExpresion!.Ubicacion,
+                        "'nulo' no basta para saber qué regresa la lambda; escriba el tipo: (x: entero): texto? => nulo");
+                }
+            }
+
+            if (ReferenceEquals(retorno, TipoLince.Nada))
+            {
+                cuerpo = new BloqueEnlazado([ComoSentencia(expresion, lambda.CuerpoExpresion!)]);
+            }
+            else
+            {
+                var valor = Convertir(expresion, retorno, lambda.CuerpoExpresion!.Ubicacion,
+                    origen => $"la lambda debe regresar '{retorno}' y esta expresión es '{origen}'", Codigos.TipoDeRetorno);
+                cuerpo = new BloqueEnlazado([new RegresarEnlazado(valor)]);
+            }
+        }
+
+        _ambito = ambitoExterior;
+        _profundidadDeLambda--;
+        _noNulos = noNulosExteriores;
+        _profundidadDeCiclo = ciclosExteriores;
+        _funcionActual = funcionExterior;
+
+        if (hayError || retorno!.EsError)
+        {
+            return new ErrorEnlazado();
+        }
+
+        var simbolo = new SimboloFuncion(nombre, provisional.Parametros, retorno, null);
+        var tipoFuncion = TipoLince.Funcion([.. simbolo.Parametros.Select(p => p.Tipo)], retorno);
+        var enlazada = new LambdaEnlazada(simbolo, cuerpo, tipoFuncion);
+        _lambdas.Add(enlazada);
+        return enlazada;
+    }
+
+    /// <summary>Si el bloque tiene algún 'regresar valor' propio (sin entrar en lambdas anidadas, que son expresiones).</summary>
+    private static bool ContieneRegresarConValor(SentenciaSintaxis sentencia) => sentencia switch
+    {
+        RegresarSintaxis regresar => regresar.Valor is not null,
+        BloqueSintaxis bloque => bloque.Sentencias.Any(ContieneRegresarConValor),
+        SiSintaxis si => ContieneRegresarConValor(si.Entonces) || (si.Sino is not null && ContieneRegresarConValor(si.Sino)),
+        MientrasSintaxis mientras => ContieneRegresarConValor(mientras.Cuerpo),
+        ParaSintaxis para => ContieneRegresarConValor(para.Cuerpo),
+        _ => false,
+    };
+
+    /// <summary>Una expresión usada por su efecto (el cuerpo de una lambda que regresa nada).</summary>
+    private ExpresionSentenciaEnlazada ComoSentencia(ExpresionEnlazada expresion, ExpresionSintaxis sintaxis)
+    {
+        if (expresion is not (LlamadaEnlazada or LlamadaMetodoEnlazada or ImprimirEnlazado or NuevoEnlazado or ErrorEnlazado
+            or InvocacionEnlazada or MiembroIntegradoEnlazado { Miembro.EsPropiedad: false }))
+        {
+            _diagnosticos.Error(Codigos.ExpresionSinEfecto, sintaxis.Ubicacion,
+                "esta expresión no tiene efecto; una lambda que regresa nada debe hacer algo (una llamada)");
+            return new ExpresionSentenciaEnlazada(new ErrorEnlazado());
+        }
+
+        return new ExpresionSentenciaEnlazada(expresion);
+    }
+
+    /// <summary>El tipo función de una función libre usada como valor.</summary>
+    private static TipoFuncion TipoDe(SimboloFuncion funcion) =>
+        TipoLince.Funcion([.. funcion.Parametros.Select(p => p.Tipo)], funcion.TipoRetorno);
 
     private TipoEnlazado EnlazarTipo(TipoUsuario tipo)
     {
@@ -707,6 +941,8 @@ public sealed class Enlazador
             _diagnosticos.Error(Codigos.VariableDuplicada, nombre.Ubicacion,
                 $"ya existe una variable llamada '{variable.Nombre}' en este ámbito o en uno que lo contiene");
         }
+
+        _profundidadDeVariable[variable] = _profundidadDeLambda;
     }
 
     private SentenciaEnlazada EnlazarAsignacion(AsignacionSintaxis asignacion)
@@ -724,7 +960,7 @@ public sealed class Enlazador
                 variable = _ambito.Buscar(nombre.Identificador.Texto);
                 if (variable is null && _tipoActual?.BuscarCampo(nombre.Identificador.Texto) is { } campoPropio)
                 {
-                    objeto = new EsteEnlazado(_tipoActual);
+                    objeto = CrearEste();
                     campo = campoPropio;
                 }
                 else if (variable is null)
@@ -732,6 +968,10 @@ public sealed class Enlazador
                     BuscarVariable(nombre.Identificador); // informa el error adecuado
                     EnlazarExpresion(asignacion.Valor);
                     return new ExpresionSentenciaEnlazada(new ErrorEnlazado());
+                }
+                else
+                {
+                    UsarVariable(variable);
                 }
 
                 break;
@@ -1054,7 +1294,7 @@ public sealed class Enlazador
     {
         var expresion = EnlazarExpresion(sentencia.Expresion);
         if (expresion is not (LlamadaEnlazada or LlamadaMetodoEnlazada or ImprimirEnlazado or NuevoEnlazado or ErrorEnlazado
-            or MiembroIntegradoEnlazado { Miembro.EsPropiedad: false }))
+            or InvocacionEnlazada or MiembroIntegradoEnlazado { Miembro.EsPropiedad: false }))
         {
             _diagnosticos.Error(Codigos.ExpresionSinEfecto, sentencia.Expresion.Ubicacion,
                 "esta expresión no tiene efecto; solo una llamada a función puede ir sola como sentencia");
@@ -1074,6 +1314,9 @@ public sealed class Enlazador
     {
         ListaLiteralSintaxis lista => EnlazarListaLiteral(lista, esperado),
         MapaLiteralSintaxis mapa => EnlazarMapaLiteral(mapa, esperado),
+        LambdaSintaxis lambda => esperado?.SinNulo is TipoFuncion funcion
+            ? EnlazarLambda(lambda, funcion.Parametros, funcion.Retorno)
+            : EnlazarLambda(lambda, null, null),
         ParentesisSintaxis parentesis => EnlazarExpresion(parentesis.Expresion, esperado),
         _ => EnlazarExpresion(expresion),
     };
@@ -1082,6 +1325,7 @@ public sealed class Enlazador
     {
         ListaLiteralSintaxis lista => EnlazarListaLiteral(lista, null),
         MapaLiteralSintaxis mapa => EnlazarMapaLiteral(mapa, null),
+        LambdaSintaxis lambda => EnlazarLambda(lambda, null, null),
         IndiceSintaxis indice => EnlazarIndice(indice),
         LiteralSintaxis literal => EnlazarLiteral(literal),
         NombreSintaxis nombre => EnlazarNombre(nombre),
@@ -1116,13 +1360,20 @@ public sealed class Enlazador
         var variable = _ambito.Buscar(nombre.Identificador.Texto);
         if (variable is not null)
         {
+            UsarVariable(variable);
             return AplicarNoNulo(new VariableEnlazada(variable));
         }
 
         // Dentro de un método, un campo del propio tipo se nombra a secas.
         if (_tipoActual?.BuscarCampo(nombre.Identificador.Texto) is { } campo)
         {
-            return AplicarNoNulo(new CampoEnlazado(new EsteEnlazado(_tipoActual), campo));
+            return AplicarNoNulo(new CampoEnlazado(CrearEste(), campo));
+        }
+
+        // Una función libre por su nombre, sin llamarla, es un valor de tipo función.
+        if (_funciones.TryGetValue(nombre.Identificador.Texto, out var funcion))
+        {
+            return new ReferenciaFuncionEnlazada(funcion, TipoDe(funcion));
         }
 
         BuscarVariable(nombre.Identificador);
@@ -1162,7 +1413,7 @@ public sealed class Enlazador
             return new ErrorEnlazado();
         }
 
-        return new EsteEnlazado(_tipoActual);
+        return CrearEste();
     }
 
     /// <summary>Busca una variable visible; si no existe, informa el error que mejor describe lo que hay y devuelve null.</summary>
@@ -1180,10 +1431,10 @@ public sealed class Enlazador
         }
 
         var nombre = identificador.Texto;
-        if (_funciones.ContainsKey(nombre) || nombre == NombreDeImprimir || _tipoActual?.BuscarMetodo(nombre) is not null)
+        if (nombre == NombreDeImprimir || _tipoActual?.BuscarMetodo(nombre) is not null)
         {
             _diagnosticos.Error(Codigos.NombreNoEsVariable, identificador.Ubicacion,
-                $"'{nombre}' es una función, no una variable; para llamarla escriba {nombre}(...)");
+                $"'{nombre}' es un método o una función integrada, no una variable; para llamarla escriba {nombre}(...)");
         }
         else if (_tipos.ContainsKey(nombre))
         {
@@ -1364,8 +1615,15 @@ public sealed class Enlazador
                 return EnlazarLlamadaAMetodo(llamada, miembro);
 
             default:
-                _diagnosticos.Error(Codigos.FuncionNoExiste, llamada.Objetivo.Ubicacion,
-                    "solo se puede llamar a una función por su nombre o a un método como objeto.metodo(...)");
+                // Cualquier otra expresión se puede llamar si es de tipo función: f(1)(2), mapa["suma"](1, 2).
+                var valor = EnlazarExpresion(llamada.Objetivo);
+                if (valor.Tipo.EsError || valor.Tipo.SinNulo is TipoFuncion)
+                {
+                    return EnlazarInvocacion(valor, llamada.Objetivo.Ubicacion.Texto, llamada);
+                }
+
+                _diagnosticos.Error(Codigos.NoEsFuncion, llamada.Objetivo.Ubicacion,
+                    $"esta expresión es de tipo '{valor.Tipo}' y no se puede llamar; solo los valores de tipo funcion(...) se llaman");
                 EnlazarArgumentos(llamada);
                 return new ErrorEnlazado();
         }
@@ -1373,33 +1631,42 @@ public sealed class Enlazador
 
     private ExpresionEnlazada EnlazarLlamadaPorNombre(LlamadaSintaxis llamada, NombreSintaxis nombre)
     {
-        var argumentos = EnlazarArgumentos(llamada);
         if (nombre.Identificador.EsFaltante)
         {
+            EnlazarArgumentos(llamada);
             return new ErrorEnlazado();
         }
 
         var texto = nombre.Identificador.Texto;
         if (texto == NombreDeImprimir)
         {
-            return EnlazarImprimir(llamada, argumentos);
+            return EnlazarImprimir(llamada, EnlazarArgumentos(llamada));
+        }
+
+        // Una variable, parámetro o campo de tipo función se llama como una función.
+        var variable = _ambito.Buscar(texto);
+        if (variable is not null)
+        {
+            UsarVariable(variable);
+            return EnlazarInvocacion(AplicarNoNulo(new VariableEnlazada(variable)), texto, llamada);
+        }
+
+        if (_tipoActual?.BuscarCampo(texto) is { } campoPropio)
+        {
+            return EnlazarInvocacion(AplicarNoNulo(new CampoEnlazado(CrearEste(), campoPropio)), texto, llamada);
         }
 
         // Dentro de un método, un método del propio tipo se llama a secas.
         if (_tipoActual?.BuscarMetodo(texto) is { } metodoPropio)
         {
-            var convertidos = ConvertirArgumentos(metodoPropio, argumentos, llamada);
-            return convertidos is null ? new ErrorEnlazado() : new LlamadaMetodoEnlazada(new EsteEnlazado(_tipoActual), metodoPropio, convertidos.Value);
+            var convertidos = EnlazarYConvertirArgumentos(metodoPropio.Nombre, metodoPropio.Parametros, llamada.Argumentos, llamada.Ubicacion);
+            return convertidos is null ? new ErrorEnlazado() : new LlamadaMetodoEnlazada(CrearEste(), metodoPropio, convertidos.Value);
         }
 
         if (!_funciones.TryGetValue(texto, out var funcion))
         {
-            if (_ambito.Buscar(texto) is not null)
-            {
-                _diagnosticos.Error(Codigos.NombreNoEsVariable, nombre.Ubicacion,
-                    $"'{texto}' es una variable, no una función, y no se puede llamar");
-            }
-            else if (_tipos.ContainsKey(texto))
+            EnlazarArgumentos(llamada);
+            if (_tipos.ContainsKey(texto))
             {
                 _diagnosticos.Error(Codigos.NombreNoEsVariable, nombre.Ubicacion,
                     $"'{texto}' es un tipo; para crear uno escriba nuevo {texto}(...)");
@@ -1412,62 +1679,123 @@ public sealed class Enlazador
             return new ErrorEnlazado();
         }
 
-        var argumentosConvertidos = ConvertirArgumentos(funcion, argumentos, llamada);
+        var argumentosConvertidos = EnlazarYConvertirArgumentos(funcion.Nombre, funcion.Parametros, llamada.Argumentos, llamada.Ubicacion);
         return argumentosConvertidos is null ? new ErrorEnlazado() : new LlamadaEnlazada(funcion, argumentosConvertidos.Value);
+    }
+
+    /// <summary>Llamada a un valor (variable, parámetro o campo) que debe ser de tipo función.</summary>
+    private ExpresionEnlazada EnlazarInvocacion(ExpresionEnlazada valor, string nombre, LlamadaSintaxis llamada)
+    {
+        if (valor.Tipo.EsError)
+        {
+            EnlazarArgumentos(llamada);
+            return new ErrorEnlazado();
+        }
+
+        if (valor.Tipo is TipoNulable { Base: TipoFuncion })
+        {
+            EnlazarArgumentos(llamada);
+            _diagnosticos.Error(Codigos.MiembroDeNulable, llamada.Objetivo.Ubicacion,
+                $"'{nombre}' es de tipo '{valor.Tipo}' y puede ser nulo; compruébelo antes de llamarla: si {nombre} != nulo {{ ... }}");
+            return new ErrorEnlazado();
+        }
+
+        if (valor.Tipo is not TipoFuncion tipoFuncion)
+        {
+            EnlazarArgumentos(llamada);
+            _diagnosticos.Error(Codigos.NoEsFuncion, llamada.Objetivo.Ubicacion,
+                $"'{nombre}' es de tipo '{valor.Tipo}' y no se puede llamar; solo los valores de tipo funcion(...) se llaman");
+            return new ErrorEnlazado();
+        }
+
+        var parametros = tipoFuncion.Parametros
+            .Select((t, i) => new SimboloVariable($"p{i + 1}", t, esMutable: false, ClaseDeVariable.Parametro, i))
+            .ToImmutableArray();
+        var convertidos = EnlazarYConvertirArgumentos(nombre, parametros, llamada.Argumentos, llamada.Ubicacion);
+        return convertidos is null ? new ErrorEnlazado() : new InvocacionEnlazada(valor, convertidos.Value);
     }
 
     private ExpresionEnlazada EnlazarLlamadaAMetodo(LlamadaSintaxis llamada, MiembroSintaxis miembro)
     {
         var objeto = EnlazarExpresion(miembro.Objeto);
-        var argumentos = EnlazarArgumentos(llamada);
 
         if (objeto.Tipo.EsError || miembro.Nombre.EsFaltante)
         {
+            EnlazarArgumentos(llamada);
             return new ErrorEnlazado();
         }
 
         if (objeto.Tipo.EsNulable)
         {
+            EnlazarArgumentos(llamada);
             InformarMiembroDeNulable(objeto, miembro.Objeto);
             return new ErrorEnlazado();
         }
 
         if (objeto.Tipo is not TipoUsuario tipo)
         {
-            return EnlazarLlamadaIntegrada(objeto, miembro.Nombre, argumentos, llamada);
+            return EnlazarLlamadaIntegrada(objeto, miembro.Nombre, llamada);
         }
 
         var nombre = miembro.Nombre.Texto;
         var metodo = tipo.BuscarMetodo(nombre);
         if (metodo is null)
         {
-            if (tipo.BuscarCampo(nombre) is not null)
+            if (tipo.BuscarCampo(nombre) is { } campo)
             {
-                _diagnosticos.Error(Codigos.NombreNoEsVariable, miembro.Nombre.Ubicacion,
-                    $"'{nombre}' es un campo de '{tipo.Nombre}', no un método, y no se puede llamar");
-            }
-            else
-            {
-                _diagnosticos.Error(Codigos.MiembroNoExiste, miembro.Nombre.Ubicacion,
-                    $"la {tipo.Clase} '{tipo.Nombre}' no tiene un método llamado '{nombre}'");
+                // Un campo de tipo función se llama como un método: objeto.callback(1).
+                var campoLeido = BuscarCampoDe(objeto, miembro.Nombre, miembro.Objeto);
+                return campoLeido is null
+                    ? Descartar(llamada)
+                    : EnlazarInvocacion(AplicarNoNulo(new CampoEnlazado(objeto, campoLeido)), nombre, llamada);
             }
 
+            EnlazarArgumentos(llamada);
+            _diagnosticos.Error(Codigos.MiembroNoExiste, miembro.Nombre.Ubicacion,
+                $"la {tipo.Clase} '{tipo.Nombre}' no tiene un método llamado '{nombre}'");
             return new ErrorEnlazado();
         }
 
         if (metodo.EsPrivada && !ReferenceEquals(_tipoActual, tipo))
         {
+            EnlazarArgumentos(llamada);
             _diagnosticos.Error(Codigos.MiembroPrivado, miembro.Nombre.Ubicacion,
                 $"el método '{nombre}' es privado de '{tipo.Nombre}' y solo se puede llamar desde dentro de la {tipo.Clase}");
             return new ErrorEnlazado();
         }
 
-        var convertidos = ConvertirArgumentos(metodo, argumentos, llamada);
+        var convertidos = EnlazarYConvertirArgumentos(metodo.Nombre, metodo.Parametros, llamada.Argumentos, llamada.Ubicacion);
         return convertidos is null ? new ErrorEnlazado() : new LlamadaMetodoEnlazada(objeto, metodo, convertidos.Value);
+    }
+
+    /// <summary>Enlaza los argumentos solo para informar sus errores, cuando la llamada ya falló.</summary>
+    private ErrorEnlazado Descartar(LlamadaSintaxis llamada)
+    {
+        EnlazarArgumentos(llamada);
+        return new ErrorEnlazado();
     }
 
     private ImmutableArray<ExpresionEnlazada> EnlazarArgumentos(LlamadaSintaxis llamada) =>
         EnlazarArgumentos(llamada.Argumentos);
+
+    /// <summary>
+    /// Enlaza cada argumento sabiendo el tipo del parámetro al que va (así una lambda o un
+    /// literal vacío toman su tipo del contexto) y lo convierte. Null si algo falla (ya informado).
+    /// </summary>
+    private ImmutableArray<ExpresionEnlazada>? EnlazarYConvertirArgumentos(
+        string nombre,
+        ImmutableArray<SimboloVariable> parametros,
+        ImmutableArray<ExpresionSintaxis> sintaxis,
+        Ubicacion ubicacionLlamada)
+    {
+        var argumentos = ImmutableArray.CreateBuilder<ExpresionEnlazada>(sintaxis.Length);
+        for (var i = 0; i < sintaxis.Length; i++)
+        {
+            argumentos.Add(EnlazarExpresion(sintaxis[i], i < parametros.Length ? parametros[i].Tipo : null));
+        }
+
+        return ConvertirArgumentos(nombre, parametros, argumentos.MoveToImmutable(), sintaxis, ubicacionLlamada);
+    }
 
     private ImmutableArray<ExpresionEnlazada> EnlazarArgumentos(ImmutableArray<ExpresionSintaxis> sintaxis)
     {
@@ -1585,29 +1913,117 @@ public sealed class Enlazador
         return new MiembroIntegradoEnlazado(objeto, miembro, []);
     }
 
-    private ExpresionEnlazada EnlazarLlamadaIntegrada(ExpresionEnlazada objeto, Token nombre, ImmutableArray<ExpresionEnlazada> argumentos, LlamadaSintaxis llamada)
+    private ExpresionEnlazada EnlazarLlamadaIntegrada(ExpresionEnlazada objeto, Token nombre, LlamadaSintaxis llamada)
     {
+        if (objeto.Tipo is TipoGenerico { EsLista: true } lista && Integrados.GenericosDeLista.Contains(nombre.Texto))
+        {
+            return EnlazarGenericoDeLista(objeto, lista, nombre, llamada);
+        }
+
         var miembro = Integrados.Buscar(objeto.Tipo, nombre.Texto);
         if (miembro is null)
         {
             InformarMiembroIntegradoInexistente(objeto.Tipo, nombre);
-            return new ErrorEnlazado();
+            return Descartar(llamada);
         }
 
         if (miembro.EsPropiedad)
         {
             _diagnosticos.Error(Codigos.NombreNoEsVariable, nombre.Ubicacion,
                 $"'{nombre.Texto}' de '{objeto.Tipo}' no es un método; se lee sin paréntesis: .{nombre.Texto}");
-            return new ErrorEnlazado();
+            return Descartar(llamada);
         }
 
-        var convertidos = ConvertirArgumentos(nombre.Texto, miembro.Parametros, argumentos, llamada.Argumentos, llamada.Ubicacion);
+        var convertidos = EnlazarYConvertirArgumentos(nombre.Texto, miembro.Parametros, llamada.Argumentos, llamada.Ubicacion);
+        return convertidos is null ? new ErrorEnlazado() : new MiembroIntegradoEnlazado(objeto, miembro, convertidos.Value);
+    }
+
+    /// <summary>
+    /// <c>transformar</c>, <c>ordenarPor</c> y <c>reducir</c>: su tipo de resultado sale de la
+    /// lambda (o del valor inicial), así que primero se enlaza esa parte sin tipo esperado y
+    /// después se arma el miembro con el tipo inferido.
+    /// </summary>
+    private ExpresionEnlazada EnlazarGenericoDeLista(ExpresionEnlazada objeto, TipoGenerico lista, Token nombre, LlamadaSintaxis llamada)
+    {
+        var texto = nombre.Texto;
+        var argumentos = llamada.Argumentos;
+        var esperados = texto == "reducir" ? 2 : 1;
+        if (argumentos.Length != esperados)
+        {
+            _diagnosticos.Error(Codigos.CantidadDeArgumentos, llamada.Ubicacion,
+                $"'{texto}' espera {esperados} {(esperados == 1 ? "argumento" : "argumentos")} y recibió {argumentos.Length}");
+            return Descartar(llamada);
+        }
+
+        TipoLince inferido;
+        if (texto == "reducir")
+        {
+            var inicial = EnlazarExpresion(argumentos[0]);
+            if (ReferenceEquals(inicial.Tipo, TipoLince.Nulo) || ReferenceEquals(inicial.Tipo, TipoLince.Nada))
+            {
+                _diagnosticos.Error(Codigos.NoSePuedeInferir, argumentos[0].Ubicacion,
+                    "el valor inicial de 'reducir' debe tener un tipo concreto; es el tipo del acumulador");
+                return new ErrorEnlazado();
+            }
+
+            if (inicial.Tipo.EsError)
+            {
+                return new ErrorEnlazado();
+            }
+
+            inferido = inicial.Tipo;
+        }
+        else
+        {
+            // La función: una lambda (sus parámetros son el elemento; el retorno se infiere) o un valor de tipo función.
+            var funcion = argumentos[0] is LambdaSintaxis lambda
+                ? EnlazarLambda(lambda, [lista.Elemento], null)
+                : EnlazarExpresion(argumentos[0]);
+            if (funcion.Tipo.EsError)
+            {
+                return new ErrorEnlazado();
+            }
+
+            if (funcion.Tipo is not TipoFuncion { Parametros.Length: 1 } tipoFuncion || !ReferenceEquals(tipoFuncion.Parametros[0], lista.Elemento))
+            {
+                _diagnosticos.Error(Codigos.TipoDeArgumento, argumentos[0].Ubicacion,
+                    $"'{texto}' espera una función de un parámetro '{lista.Elemento}' y este argumento es '{funcion.Tipo}'");
+                return new ErrorEnlazado();
+            }
+
+            inferido = tipoFuncion.Retorno;
+            if (ReferenceEquals(inferido, TipoLince.Nada))
+            {
+                _diagnosticos.Error(Codigos.TipoDeArgumento, argumentos[0].Ubicacion,
+                    $"la función de '{texto}' debe regresar un valor");
+                return new ErrorEnlazado();
+            }
+
+            if (texto == "ordenarPor" && !inferido.EsNumerico && !ReferenceEquals(inferido, TipoLince.Texto))
+            {
+                _diagnosticos.Error(Codigos.ClaveNoComparable, argumentos[0].Ubicacion,
+                    $"la clave de 'ordenarPor' debe ser entero, decimal o texto, no '{inferido}'");
+                return new ErrorEnlazado();
+            }
+
+            // Ya enlazada; se vuelve a enlazar abajo con el tipo exacto solo para convertir. Evitarlo:
+            var miembroListo = Integrados.DeListaGenerico(lista, texto, inferido);
+            return new MiembroIntegradoEnlazado(objeto, miembroListo, [funcion]);
+        }
+
+        var miembro = Integrados.DeListaGenerico(lista, texto, inferido);
+        var convertidos = EnlazarYConvertirArgumentos(texto, miembro.Parametros, argumentos, llamada.Ubicacion);
         return convertidos is null ? new ErrorEnlazado() : new MiembroIntegradoEnlazado(objeto, miembro, convertidos.Value);
     }
 
     private void InformarMiembroIntegradoInexistente(TipoLince tipo, Token nombre)
     {
         var disponibles = Integrados.MiembrosDe(tipo).Select(m => m.Nombre).ToList();
+        if (tipo.EsLista)
+        {
+            disponibles.AddRange(Integrados.GenericosDeLista);
+        }
+
         var pista = disponibles.Count == 0 ? "" : $"; tiene: {string.Join(", ", disponibles)}";
         _diagnosticos.Error(Codigos.MiembroNoExiste, nombre.Ubicacion,
             $"el tipo '{tipo}' no tiene un miembro llamado '{nombre.Texto}'{pista}");
@@ -1810,14 +2226,15 @@ public sealed class Enlazador
 
     private ExpresionEnlazada EnlazarNuevo(NuevoSintaxis nuevo)
     {
-        var argumentos = EnlazarArgumentos(nuevo.Argumentos);
         if (nuevo.Tipo.Palabra.EsFaltante)
         {
+            EnlazarArgumentos(nuevo.Argumentos);
             return new ErrorEnlazado();
         }
 
         if (nuevo.Tipo.EsNulable)
         {
+            EnlazarArgumentos(nuevo.Argumentos);
             _diagnosticos.Error(Codigos.NuevoDeTipoBasico, nuevo.Tipo.Interrogacion!.Ubicacion,
                 "lo que crea 'nuevo' nunca es nulo; quite el '?'");
             return new ErrorEnlazado();
@@ -1827,8 +2244,9 @@ public sealed class Enlazador
         switch (tipo)
         {
             case TipoGenerico coleccion:
-                if (argumentos.Length > 0)
+                if (nuevo.Argumentos.Length > 0)
                 {
+                    EnlazarArgumentos(nuevo.Argumentos);
                     _diagnosticos.Error(Codigos.CantidadDeArgumentos, nuevo.Ubicacion,
                         $"'nuevo {coleccion}()' no recibe argumentos; para crearla con elementos use un literal: [1, 2] o {{\"a\": 1}}");
                     return new ErrorEnlazado();
@@ -1837,13 +2255,15 @@ public sealed class Enlazador
                 return new NuevaColeccionEnlazada(coleccion);
 
             case TipoUsuario usuario:
-                var convertidos = ConvertirArgumentos($"nuevo {usuario.Nombre}", usuario.ParametrosDeNuevo, argumentos, nuevo.Argumentos, nuevo.Ubicacion);
+                var convertidos = EnlazarYConvertirArgumentos($"nuevo {usuario.Nombre}", usuario.ParametrosDeNuevo, nuevo.Argumentos, nuevo.Ubicacion);
                 return convertidos is null ? new ErrorEnlazado() : new NuevoEnlazado(usuario, convertidos.Value);
 
             case { EsError: true }:
+                EnlazarArgumentos(nuevo.Argumentos);
                 return new ErrorEnlazado();
 
             default:
+                EnlazarArgumentos(nuevo.Argumentos);
                 _diagnosticos.Error(Codigos.NuevoDeTipoBasico, nuevo.Tipo.Ubicacion,
                     $"'{tipo}' es un tipo básico y no se crea con 'nuevo'; escriba el valor directamente");
                 return new ErrorEnlazado();

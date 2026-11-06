@@ -47,7 +47,26 @@ public class TipoLince
         || this is TipoNulable { Base: var b } && ReferenceEquals(b, Texto);
 
     /// <summary>Tipos por referencia: se pueden hacer nulables y se comparan por identidad.</summary>
-    public bool EsReferencia => ReferenceEquals(this, Texto) || this is TipoUsuario { EsEstructura: false } || this is TipoNulable || this is TipoGenerico;
+    public bool EsReferencia => ReferenceEquals(this, Texto) || this is TipoUsuario { EsEstructura: false } || this is TipoNulable
+        || this is TipoGenerico || this is TipoFuncion;
+
+    private static readonly Dictionary<string, TipoFuncion> _funciones = new();
+
+    /// <summary><c>funcion(P1, P2): R</c>, único por firma.</summary>
+    public static TipoFuncion Funcion(ImmutableArray<TipoLince> parametros, TipoLince retorno)
+    {
+        var nombre = $"funcion({string.Join(", ", parametros.Select(p => p.Nombre))})" + (ReferenceEquals(retorno, Nada) ? "" : ": " + retorno.Nombre);
+        lock (_funciones)
+        {
+            if (!_funciones.TryGetValue(nombre, out var funcion))
+            {
+                funcion = new TipoFuncion(nombre, parametros, retorno);
+                _funciones[nombre] = funcion;
+            }
+
+            return funcion;
+        }
+    }
 
     public bool EsLista => this is TipoGenerico { EsLista: true };
 
@@ -129,6 +148,27 @@ public sealed class TipoNulable : TipoLince
     }
 
     public TipoLince Base { get; }
+}
+
+/// <summary>
+/// El tipo de una función como valor: <c>funcion(entero, texto): logico</c>. Lo tienen las
+/// lambdas y las funciones libres usadas por su nombre; en .NET es un delegado
+/// <c>Func&lt;...&gt;</c> o <c>Action&lt;...&gt;</c>.
+/// </summary>
+public sealed class TipoFuncion : TipoLince
+{
+    internal TipoFuncion(string nombre, ImmutableArray<TipoLince> parametros, TipoLince retorno)
+        : base(nombre, null)
+    {
+        Parametros = parametros;
+        Retorno = retorno;
+    }
+
+    public ImmutableArray<TipoLince> Parametros { get; }
+
+    public TipoLince Retorno { get; }
+
+    public bool RegresaNada => ReferenceEquals(Retorno, Nada);
 }
 
 /// <summary>

@@ -282,13 +282,13 @@ public class PruebasDeEnlace
     }
 
     [Theory]
-    [InlineData("sea a = principal;", "es una función, no una variable")]
-    [InlineData("sea a = 1; a();", "es una variable, no una función")]
-    public void Confundir_funcion_y_variable_es_LN3026(string cuerpo, string mensaje)
+    [InlineData("sea a = imprimir;", Codigos.NombreNoEsVariable, "no una variable")]
+    [InlineData("sea a = 1; a();", Codigos.NoEsFuncion, "'entero' y no se puede llamar")]
+    public void Confundir_funcion_y_variable_es_error(string cuerpo, string codigo, string mensaje)
     {
         var error = UnicoError(cuerpo);
 
-        Assert.Equal(Codigos.NombreNoEsVariable, error.Codigo);
+        Assert.Equal(codigo, error.Codigo);
         Assert.Contains(mensaje, error.Mensaje);
     }
 

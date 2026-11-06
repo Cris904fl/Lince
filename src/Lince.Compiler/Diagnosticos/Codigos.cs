@@ -69,6 +69,12 @@ public static class Codigos
     public const string NoSePuedeIndexar = "LN3047";
     public const string MiembroDeSoloLectura = "LN3048";
     public const string NoSePuedeRecorrer = "LN3049";
+    public const string LambdaSinTipos = "LN3050";
+    public const string LambdaSinRetorno = "LN3051";
+    public const string NoEsFuncion = "LN3052";
+    public const string ParametrosDeLambda = "LN3053";
+    public const string ClaveNoComparable = "LN3054";
+    public const string LambdaEnCampo = "LN3055";
 
     // Emisión y herramienta
     public const string ErrorDeEmision = "LN4001";

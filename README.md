@@ -33,7 +33,9 @@ Hay clases y estructuras con campos, métodos, constructor, `este` y `privado`
 puede ser `nulo` y solo se usa como `Nodo` tras comprobarlo
 ([ejemplos/lista-enlazada.ln](ejemplos/lista-enlazada.ln)); y colecciones `lista<T>` y
 `mapa<K, V>` con literales, índices, `para x en coleccion` y métodos de texto y números sobre
-las clases de .NET ([ejemplos/inventario.ln](ejemplos/inventario.ln)). La referencia completa del lenguaje está en
+las clases de .NET ([ejemplos/inventario.ln](ejemplos/inventario.ln)); y lambdas con
+clausuras, tipos función y `filtrar`, `transformar`, `ordenarPor` o `reducir` sobre las
+listas ([ejemplos/empleados.ln](ejemplos/empleados.ln)). La referencia completa del lenguaje está en
 [docs/especificacion.md](docs/especificacion.md) y lo que viene, en
 [docs/hoja-de-ruta.md](docs/hoja-de-ruta.md).
 

@@ -79,6 +79,7 @@ public static class Palabras
         TipoToken.Punto => ".",
         TipoToken.PuntoPunto => "..",
         TipoToken.Interrogacion => "?",
+        TipoToken.Flecha => "=>",
         TipoToken.Mas => "+",
         TipoToken.Menos => "-",
         TipoToken.Asterisco => "*",

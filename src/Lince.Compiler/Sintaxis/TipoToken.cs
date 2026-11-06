@@ -58,6 +58,9 @@ public enum TipoToken
     PuntoPunto,
     Interrogacion,
 
+    /// <summary><c>=&gt;</c>, la flecha de las lambdas.</summary>
+    Flecha,
+
     // Operadores aritméticos
     Mas,
     Menos,

@@ -1,8 +1,8 @@
 # Especificación del lenguaje Lince
 
-> Versión 0.3 (fase 3a: colecciones). Este documento es la referencia de la sintaxis y la
-> semántica que el compilador implementa hoy. Cada cambio al lenguaje se refleja aquí en el
-> mismo trabajo.
+> Versión 0.4 (fase 3: colecciones y funciones como valores). Este documento es la referencia
+> de la sintaxis y la semántica que el compilador implementa hoy. Cada cambio al lenguaje se
+> refleja aquí en el mismo trabajo.
 
 Lince es un lenguaje de propósito general, de tipado estático, con palabras clave en español y
 sintaxis de llaves al estilo de C# y Go. Compila a ensamblados .NET (IL), así que corre sobre el
@@ -71,7 +71,7 @@ Un literal `entero` que no cabe en 64 bits es un error (`LN1003`).
 ### 1.5 Signos y operadores
 
 ```
-( ) { } [ ] , ; : . .. ?
+( ) { } [ ] , ; : . .. ? =>
 + - * / %
 = += -= *= /= %=
 == != < <= > >=
@@ -90,7 +90,8 @@ declaracion_funcion  = [ modificador ] "funcion" ( identificador | "nuevo" )
 parametros           = parametro { "," parametro } ;
 parametro            = identificador ":" tipo ;
 tipo                 = ( "entero" | "decimal" | "texto" | "logico" | "nada" | identificador
-                       | "lista" "<" tipo ">" | "mapa" "<" tipo "," tipo ">" ) [ "?" ] ;
+                       | "lista" "<" tipo ">" | "mapa" "<" tipo "," tipo ">"
+                       | "funcion" "(" [ tipo { "," tipo } ] ")" [ ":" tipo ] ) [ "?" ] ;
 
 declaracion_tipo     = ( "clase" | "estructura" ) identificador "{" { miembro } "}" ;
 miembro              = campo | declaracion_funcion ;
@@ -130,8 +131,12 @@ argumentos           = expresion { "," expresion } ;
 primaria             = literal | identificador | "este" | "(" expresion ")"
                      | "nuevo" tipo "(" [ argumentos ] ")"
                      | "[" [ argumentos ] "]"
-                     | "{" [ par { "," par } ] "}" ;
+                     | "{" [ par { "," par } ] "}"
+                     | lambda ;
 par                  = expresion ":" expresion ;
+lambda               = ( identificador | "(" [ parametro_lambda { "," parametro_lambda } ] ")" [ ":" tipo ] )
+                       "=>" ( expresion | bloque ) ;
+parametro_lambda     = identificador [ ":" tipo ] ;
 ```
 
 Observaciones:
@@ -159,8 +164,9 @@ Observaciones:
 La hoja de ruta contempla un tipo de precisión decimal para dinero.
 
 A estos se suman los tipos que declara el programa: las **clases** (por referencia) y las
-**estructuras** (por valor), descritas en la sección 4.4, y las **colecciones** `lista<T>` y
-`mapa<K, V>` (sección 3.4), por referencia.
+**estructuras** (por valor), descritas en la sección 4.4; las **colecciones** `lista<T>` y
+`mapa<K, V>` (sección 3.4), por referencia; y los **tipos función** `funcion(P1, P2): R`
+(sección 3.6), también por referencia.
 
 ### 3.1 Conversiones implícitas
 
@@ -342,6 +348,72 @@ Fachadas sobre `String` y `Math` de .NET. Las comparaciones y búsquedas son por
 
 Un literal numérico también los admite: `2.0.raiz()`, `(-7).absoluto()`.
 
+### 3.6 Funciones como valores y lambdas
+
+```
+sea doble = (n: entero) => n * 2;                  // funcion(entero): entero
+var operacion: funcion(entero, entero): entero = (a, b) => a + b;
+operacion = (a, b) => a * b;
+imprimir(operacion(2, 3));                          // 6
+
+sea saludar = (nombre: texto): texto => {
+    regresar "Hola, " + nombre;
+};
+
+funcion aplicar(f: funcion(entero): entero, v: entero): entero { regresar f(v); }
+imprimir(aplicar(doble, 4));                        // 8
+imprimir(aplicar(n => n + 1, 4));                   // 5: el tipo de n lo da el parámetro f
+```
+
+- El tipo `funcion(P1, ..., Pn): R` (sin `: R` regresa `nada`) es el de un valor que se puede
+  llamar con `f(argumentos)`. Es por referencia y en .NET es un delegado `Func` o `Action`.
+  Un `?` después del tipo de retorno pertenece al retorno (`funcion(entero): texto?` regresa
+  `texto?`); una función nulable solo se puede escribir cuando regresa nada (`funcion(entero)?`).
+- Una **lambda** es `x => expresion`, `(a, b) => expresion` o `(a, b): R => { bloque }`. Los
+  tipos de sus parámetros se escriben (`(x: entero) => ...`) o se toman del contexto: el
+  parámetro al que se pasa, la variable con tipo a la que se asigna, el tipo de retorno de
+  la función que la regresa. Sin ninguna de las dos cosas es el error `LN3050`. Con cuerpo
+  de expresión, el tipo de retorno es el de la expresión (o `nada` si es una llamada sin
+  valor); con cuerpo de bloque, es `nada` si el bloque no tiene ningún `regresar valor` y, si
+  lo tiene, hay que escribirlo o tomarlo del contexto (`LN3051`).
+- Se puede llamar también al resultado de otra llamada o de un índice: `sumador(10)(5)`,
+  `operaciones["suma"](1, 2)`.
+- Una **función libre** usada por su nombre, sin paréntesis, es un valor de su tipo función
+  (`aplicar(doble, 4)`). Los métodos no, en esta versión.
+- Se puede llamar a una variable, un parámetro o un campo de tipo función (`operacion(2, 3)`,
+  `boton.alPulsar("x")`). Llamar a otra cosa es `LN3052`; si puede ser nulo, hay que
+  comprobarlo antes (`LN3042`).
+- **Clausuras.** Una lambda puede usar y modificar las variables de la función que la
+  contiene y `este`; esas variables pasan a vivir en un objeto de cierre compartido por la
+  función y sus lambdas, así que los cambios se ven en los dos sentidos y sobreviven a la
+  función (un contador que recuerda su estado). Dentro de la lambda, `regresar` es suyo,
+  `romper` y `continuar` no salen de un ciclo exterior y lo que se sabía sobre nulos no
+  entra, porque puede correr en cualquier momento. Hay un solo cierre por función: dos
+  lambdas creadas en vueltas distintas de un ciclo comparten las variables declaradas fuera
+  de la lambda, igual que en JavaScript con `var`.
+- Una lambda no puede ir en el valor inicial de un campo (`LN3055`); se asigna en el
+  constructor o en un método.
+
+Métodos de orden superior de `lista<T>` (sobre LINQ de .NET; `R`, `K` y `A` se infieren de la
+lambda o del valor inicial):
+
+| Miembro                         | Tipo        | Qué hace                                     |
+| ------------------------------- | ----------- | -------------------------------------------- |
+| `filtrar(f: funcion(T): logico)`| `lista<T>`  | Los que cumplen `f`, en una lista nueva      |
+| `transformar(f: funcion(T): R)` | `lista<R>`  | Aplica `f` a cada uno                        |
+| `ordenarPor(f: funcion(T): K)`  | `lista<T>`  | Ordena por la clave; `K` es entero, decimal o texto (`LN3054`) |
+| `ordenar()`                     | `lista<T>`  | Solo si `T` es entero, decimal o texto       |
+| `invertir()`                    | `lista<T>`  | En orden inverso, en una lista nueva         |
+| `alguno(f)` `todos(f)`          | `logico`    |                                              |
+| `buscar(f)`                     | `T?`        | El primero que cumple, o `nulo`; solo si `T` es por referencia |
+| `reducir(inicial: A, f: funcion(A, T): A)` | `A` | Acumula de izquierda a derecha           |
+| `paraCada(f: funcion(T))`       | `nada`      | Llama a `f` con cada uno                     |
+| `suma()` `maximo()` `minimo()`  | `T`         | Solo listas de números                       |
+| `promedio()`                    | `decimal`   | Solo listas de números                       |
+| `unir(separador)`               | `texto`     | Solo `lista<texto>`                          |
+
+Todos devuelven listas nuevas; ninguno cambia la lista original.
+
 ## 4. Declaraciones
 
 ### 4.1 Funciones
@@ -519,9 +591,9 @@ Termina la función. Lleva valor si y solo si la función no regresa `nada` (`LN
 
 ### 5.6 Sentencia de expresión
 
-Solo una llamada (a función, a método o a un método integrado) o un `nuevo` pueden usarse como
-sentencia; cualquier otra expresión suelta es un error porque no tiene efecto (`LN3024`). El
-valor que devuelvan se descarta.
+Solo una llamada (a función, a método, a un valor de tipo función o a un método integrado) o
+un `nuevo` pueden usarse como sentencia; cualquier otra expresión suelta es un error porque no
+tiene efecto (`LN3024`). El valor que devuelvan se descarta.
 
 ## 6. Funciones integradas
 

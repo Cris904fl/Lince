@@ -49,13 +49,20 @@ Lo que hace cómodo a Python: `datos.filtrar(f => f.edad > 30)`.
   `raiz`, `potencia`.
 - Genéricos solo para las colecciones integradas; los de usuario quedan para la fase 9.
 
-**3b, funciones como valores (pendiente):**
+**3b, funciones como valores (hecha, 2026-11-06):**
 
-- Lambdas (`x => x * 2`, `(a, b) => { ... }`) y tipos función (`funcion(entero): logico`),
-  con clausuras sobre las variables locales. Se emiten como delegados `Func`/`Action` de .NET
-  y clases de cierre, igual que en C#.
-- Con ellas, los métodos de orden superior de `lista<T>`: `filtrar`, `transformar`, `ordenarPor`,
-  `alguno`, `todos`, `buscar`, `reducir`, `paraCada`.
+- Lambdas (`x => x * 2`, `(a, b) => a + b`, `(x: entero): entero => { ... }`) con los tipos
+  tomados del contexto o escritos, tipos función (`funcion(entero): logico`), funciones
+  libres como valores y llamada a variables, parámetros y campos de tipo función. Se emiten
+  como delegados `Func`/`Action` de .NET.
+- Clausuras: las variables capturadas (y `este`) pasan a una clase de cierre anidada, una por
+  función, igual que en C#. Queda para después un cierre por ámbito (hoy dos lambdas creadas
+  en vueltas distintas de un ciclo comparten las variables de fuera de la lambda).
+- Orden superior sobre `lista<T>` vía LINQ: `filtrar`, `transformar`, `ordenarPor`, `ordenar`,
+  `invertir`, `alguno`, `todos`, `buscar`, `reducir`, `paraCada`, `suma`, `maximo`, `minimo`,
+  `promedio`, `unir`.
+- Los métodos genéricos de .NET (LINQ) se instancian desde el emisor incluso con tipos
+  propios aún en construcción: otra pieza lista para la interoperabilidad.
 
 ## Fase 4: interoperabilidad con .NET y paquetes
 

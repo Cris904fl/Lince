@@ -210,7 +210,7 @@ public class PruebasDeColecciones : IDisposable
     }
 
     [Theory]
-    [InlineData("sea l = [1]; l.empujar(2);", "'lista<entero>' no tiene un miembro llamado 'empujar'; tiene: cantidad, agregar")]
+    [InlineData("sea l = [1]; l.empujar(2);", "'lista<entero>' no tiene un miembro llamado 'empujar'; tiene: filtrar")]
     [InlineData("sea t = \"a\"; imprimir(t.tamano);", "'texto' no tiene un miembro llamado 'tamano'")]
     [InlineData("sea l = [1]; imprimir(l.agregar);", "es un método de 'lista<entero>'")]
     [InlineData("sea l = [1]; imprimir(l.cantidad());", "se lee sin paréntesis")]

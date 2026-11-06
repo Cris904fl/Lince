@@ -193,6 +193,11 @@ public sealed class AnalizadorSintactico
 
     private TipoSintaxis AnalizarTipo()
     {
+        if (Actual.Tipo == TipoToken.PalabraFuncion)
+        {
+            return AnalizarTipoFuncion();
+        }
+
         if (Palabras.EsTipo(Actual.Tipo) || Actual.Tipo == TipoToken.Identificador)
         {
             var palabra = Avanzar();
@@ -236,6 +241,35 @@ public sealed class AnalizadorSintactico
         }
 
         return new TipoSintaxis(faltante);
+    }
+
+    /// <summary><c>funcion(entero, texto): logico</c>; sin <c>: tipo</c> regresa nada.</summary>
+    private TipoSintaxis AnalizarTipoFuncion()
+    {
+        var palabra = Avanzar();
+        Coincidir(TipoToken.ParentesisAbre);
+        var parametros = ImmutableArray.CreateBuilder<TipoSintaxis>();
+        while (Actual.Tipo is not (TipoToken.ParentesisCierra or TipoToken.FinDeArchivo))
+        {
+            parametros.Add(AnalizarTipo());
+            if (Actual.Tipo != TipoToken.Coma)
+            {
+                break;
+            }
+
+            Avanzar();
+        }
+
+        var cierre = Coincidir(TipoToken.ParentesisCierra);
+        TipoSintaxis? retorno = null;
+        if (Actual.Tipo == TipoToken.DosPuntos)
+        {
+            Avanzar();
+            retorno = AnalizarTipo();
+        }
+
+        var interrogacion = Actual.Tipo == TipoToken.Interrogacion ? Avanzar() : null;
+        return new TipoSintaxis(palabra, parametros.ToImmutable(), cierre, interrogacion, retorno);
     }
 
     private TipoDeclaradoSintaxis AnalizarTipoDeclarado()
@@ -558,6 +592,142 @@ public sealed class AnalizadorSintactico
         }
     }
 
+    // ----- Lambdas -----
+
+    /// <summary>
+    /// Mira adelante sin consumir: <c>x =&gt;</c>, o <c>( ... )</c> seguido de <c>=&gt;</c> o de
+    /// <c>: tipo =&gt;</c>. Así <c>(a + b)</c> sigue siendo un paréntesis y <c>(a, b) =&gt; ...</c> una lambda.
+    /// </summary>
+    private bool EsInicioDeLambda()
+    {
+        if (Actual.Tipo == TipoToken.Identificador)
+        {
+            return Mirar(1).Tipo == TipoToken.Flecha;
+        }
+
+        if (Actual.Tipo != TipoToken.ParentesisAbre)
+        {
+            return false;
+        }
+
+        var profundidad = 0;
+        var i = 0;
+        while (true)
+        {
+            var tipo = Mirar(i).Tipo;
+            if (tipo == TipoToken.FinDeArchivo)
+            {
+                return false;
+            }
+
+            if (tipo == TipoToken.ParentesisAbre)
+            {
+                profundidad++;
+            }
+            else if (tipo == TipoToken.ParentesisCierra)
+            {
+                profundidad--;
+                if (profundidad == 0)
+                {
+                    break;
+                }
+            }
+
+            i++;
+        }
+
+        var siguiente = Mirar(i + 1).Tipo;
+        if (siguiente == TipoToken.Flecha)
+        {
+            return true;
+        }
+
+        if (siguiente != TipoToken.DosPuntos)
+        {
+            return false;
+        }
+
+        // ( ... ): tipo =>   El tipo puede llevar <...> y '?'.
+        var j = i + 2;
+        var angulos = 0;
+        while (true)
+        {
+            var tipo = Mirar(j).Tipo;
+            if (tipo == TipoToken.Flecha && angulos == 0)
+            {
+                return true;
+            }
+
+            if (tipo == TipoToken.Menor)
+            {
+                angulos++;
+            }
+            else if (tipo == TipoToken.Mayor)
+            {
+                angulos--;
+            }
+            else if (tipo is TipoToken.FinDeArchivo or TipoToken.PuntoYComa or TipoToken.LlaveAbre or TipoToken.LlaveCierra
+                or TipoToken.ParentesisAbre or TipoToken.ParentesisCierra)
+            {
+                return false;
+            }
+
+            j++;
+        }
+    }
+
+    private LambdaSintaxis AnalizarLambda()
+    {
+        Token? abre = null;
+        Token? cierra = null;
+        var parametros = ImmutableArray.CreateBuilder<ParametroLambdaSintaxis>();
+
+        if (Actual.Tipo == TipoToken.Identificador)
+        {
+            parametros.Add(new ParametroLambdaSintaxis(Avanzar(), null, null));
+        }
+        else
+        {
+            abre = Avanzar();
+            while (Actual.Tipo is not (TipoToken.ParentesisCierra or TipoToken.FinDeArchivo))
+            {
+                var nombre = Coincidir(TipoToken.Identificador);
+                Token? dosPuntos = null;
+                TipoSintaxis? tipo = null;
+                if (Actual.Tipo == TipoToken.DosPuntos)
+                {
+                    dosPuntos = Avanzar();
+                    tipo = AnalizarTipo();
+                }
+
+                parametros.Add(new ParametroLambdaSintaxis(nombre, dosPuntos, tipo));
+                if (Actual.Tipo != TipoToken.Coma)
+                {
+                    break;
+                }
+
+                Avanzar();
+            }
+
+            cierra = Coincidir(TipoToken.ParentesisCierra);
+        }
+
+        TipoSintaxis? tipoRetorno = null;
+        if (Actual.Tipo == TipoToken.DosPuntos)
+        {
+            Avanzar();
+            tipoRetorno = AnalizarTipo();
+        }
+
+        var flecha = Coincidir(TipoToken.Flecha);
+        if (Actual.Tipo == TipoToken.LlaveAbre)
+        {
+            return new LambdaSintaxis(abre, parametros.ToImmutable(), cierra, tipoRetorno, flecha, null, AnalizarBloque());
+        }
+
+        return new LambdaSintaxis(abre, parametros.ToImmutable(), cierra, tipoRetorno, flecha, AnalizarExpresion(), null);
+    }
+
     private ImmutableArray<ExpresionSintaxis> AnalizarArgumentos()
     {
         var argumentos = ImmutableArray.CreateBuilder<ExpresionSintaxis>();
@@ -583,6 +753,11 @@ public sealed class AnalizadorSintactico
 
     private ExpresionSintaxis AnalizarPrimaria()
     {
+        if (EsInicioDeLambda())
+        {
+            return AnalizarLambda();
+        }
+
         switch (Actual.Tipo)
         {
             case TipoToken.LiteralEntero:
@@ -657,6 +832,11 @@ public sealed class AnalizadorSintactico
                     var cierra = Coincidir(TipoToken.ParentesisCierra);
                     return new ParentesisSintaxis(abre, expresion, cierra);
                 }
+
+            case TipoToken.Flecha:
+                // "=> x" sin parámetros: lo más probable es que faltara "()" delante.
+                Informar(Codigos.SeEsperabaExpresion, "una lambda sin parámetros se escribe () => ...");
+                return new NombreSintaxis(Faltante(TipoToken.Identificador));
 
             default:
                 if (Actual.Tipo == TipoToken.PalabraReservada)

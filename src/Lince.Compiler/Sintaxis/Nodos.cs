@@ -92,11 +92,13 @@ public sealed record ParametroSintaxis(Token Nombre, Token DosPuntos, TipoSintax
 /// con sus argumentos (<c>lista&lt;entero&gt;</c>, <c>mapa&lt;texto, Cuenta&gt;</c>) o el identificador
 /// de un tipo declarado, con un <c>?</c> opcional que lo hace nulable.
 /// </summary>
+/// <param name="Retorno">Solo en un tipo función: <c>funcion(entero): logico</c>; sus parámetros van en <see cref="Argumentos"/>.</param>
 public sealed record TipoSintaxis(
     Token Palabra,
     ImmutableArray<TipoSintaxis> Argumentos,
     Token? Cierre = null,
-    Token? Interrogacion = null) : NodoSintaxis
+    Token? Interrogacion = null,
+    TipoSintaxis? Retorno = null) : NodoSintaxis
 {
     public TipoSintaxis(Token palabra)
         : this(palabra, [])
@@ -105,7 +107,16 @@ public sealed record TipoSintaxis(
 
     public bool EsNulable => Interrogacion is not null;
 
-    public override Ubicacion Ubicacion => Ubicacion.Entre(Palabra.Ubicacion, (Interrogacion ?? Cierre ?? Palabra).Ubicacion);
+    public bool EsFuncion => Palabra.Tipo == TipoToken.PalabraFuncion;
+
+    public override Ubicacion Ubicacion
+    {
+        get
+        {
+            var fin = Interrogacion?.Ubicacion ?? Retorno?.Ubicacion ?? Cierre?.Ubicacion ?? Palabra.Ubicacion;
+            return Ubicacion.Entre(Palabra.Ubicacion, fin);
+        }
+    }
 }
 
 // ----- Sentencias -----
@@ -272,6 +283,36 @@ public sealed record MapaLiteralSintaxis(Token LlaveAbre, ImmutableArray<ParSint
 public sealed record ParSintaxis(ExpresionSintaxis Clave, Token DosPuntos, ExpresionSintaxis Valor) : NodoSintaxis
 {
     public override Ubicacion Ubicacion => Ubicacion.Entre(Clave.Ubicacion, Valor.Ubicacion);
+}
+
+/// <summary>
+/// Una lambda: <c>x =&gt; x * 2</c>, <c>(a, b) =&gt; a + b</c>, <c>(x: entero): entero =&gt; { ... }</c>.
+/// Tiene cuerpo de expresión o de bloque, nunca los dos.
+/// </summary>
+public sealed record LambdaSintaxis(
+    Token? ParentesisAbre,
+    ImmutableArray<ParametroLambdaSintaxis> Parametros,
+    Token? ParentesisCierra,
+    TipoSintaxis? TipoRetorno,
+    Token Flecha,
+    ExpresionSintaxis? CuerpoExpresion,
+    BloqueSintaxis? CuerpoBloque) : ExpresionSintaxis
+{
+    public override Ubicacion Ubicacion
+    {
+        get
+        {
+            var inicio = ParentesisAbre?.Ubicacion ?? (Parametros.Length > 0 ? Parametros[0].Ubicacion : Flecha.Ubicacion);
+            var fin = CuerpoExpresion?.Ubicacion ?? CuerpoBloque!.Ubicacion;
+            return Ubicacion.Entre(inicio, fin);
+        }
+    }
+}
+
+/// <summary>Un parámetro de lambda; el tipo es opcional cuando el contexto lo da.</summary>
+public sealed record ParametroLambdaSintaxis(Token Nombre, Token? DosPuntos, TipoSintaxis? Tipo) : NodoSintaxis
+{
+    public override Ubicacion Ubicacion => Tipo is null ? Nombre.Ubicacion : Ubicacion.Entre(Nombre.Ubicacion, Tipo.Ubicacion);
 }
 
 /// <summary><c>objeto[indice]</c>: un elemento de una lista o el valor de una clave de un mapa.</summary>

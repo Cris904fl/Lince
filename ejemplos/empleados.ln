@@ -1,0 +1,73 @@
+// Lambdas y funciones como valores: filtrar, transformar, ordenarPor, reducir y clausuras.
+
+clase Empleado {
+    nombre: texto;
+    area: texto;
+    salario: decimal;
+
+    funcion describir(): texto {
+        regresar nombre + " (" + area + ") " + salario;
+    }
+}
+
+funcion esCaro(e: Empleado): logico {
+    regresar e.salario > 3000;
+}
+
+funcion contadorDesde(inicio: entero): funcion(): entero {
+    var actual = inicio;
+    regresar () => {
+        actual += 1;
+        regresar actual;
+    };
+}
+
+funcion principal() {
+    sea gente = [
+        nuevo Empleado("Ana", "ventas", 2500),
+        nuevo Empleado("Luis", "sistemas", 4200),
+        nuevo Empleado("Eva", "sistemas", 3800),
+        nuevo Empleado("Juan", "ventas", 2100)
+    ];
+
+    // Lambdas con el tipo que les da el contexto.
+    sea sistemas = gente.filtrar(e => e.area == "sistemas");
+    imprimir("sistemas: " + sistemas.transformar(e => e.nombre).unir(", "));
+
+    // Una función libre como valor.
+    imprimir("caros: " + gente.filtrar(esCaro).cantidad);
+
+    // Ordenar por una clave y recorrer.
+    para e en gente.ordenarPor(e => e.salario) {
+        imprimir(e.describir());
+    }
+
+    // Reducir y los agregados numéricos.
+    sea salarios = gente.transformar(e => e.salario);
+    imprimir("nómina: " + salarios.suma() + ", promedio: " + salarios.promedio() + ", máximo: " + salarios.maximo());
+    imprimir("letras: " + gente.reducir(0, (total, e) => total + e.nombre.longitud));
+
+    // Una lambda que captura una variable del cuerpo.
+    sea umbral = 3000;
+    imprimir("alguno sobre el umbral: " + gente.alguno(e => e.salario > umbral));
+    imprimir("todos sobre el umbral: " + gente.todos(e => e.salario > umbral));
+
+    // Funciones que regresan funciones y guardan estado.
+    sea siguiente = contadorDesde(10);
+    imprimir(siguiente());
+    imprimir(siguiente());
+
+    // Una variable de tipo función, reasignable.
+    var operacion: funcion(entero, entero): entero = (a, b) => a + b;
+    imprimir(operacion(2, 3));
+    operacion = (a, b) => a * b;
+    imprimir(operacion(2, 3));
+
+    // Un procedimiento sin valor de retorno.
+    gente.paraCada(e => imprimir("- " + e.nombre));
+
+    sea encontrado = gente.buscar(e => e.nombre.empiezaCon("J"));
+    si encontrado != nulo {
+        imprimir("encontrado: " + encontrado.nombre);
+    }
+}
